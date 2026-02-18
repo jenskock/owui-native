@@ -19,6 +19,7 @@ import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { ChatsScreen } from './src/screens/ChatsScreen';
 import { ChatScreen } from './src/screens/ChatScreen';
+import { SettingsScreen } from './src/screens/SettingsScreen';
 import type { RootStackParamList } from './src/navigation/types';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -47,6 +48,7 @@ function AuthNavigator() {
         <>
           <Stack.Screen name="Chats" component={ChatsScreen} />
           <Stack.Screen name="Chat" component={ChatScreen} />
+          <Stack.Screen name="Settings" component={SettingsScreen} />
         </>
       )}
     </Stack.Navigator>

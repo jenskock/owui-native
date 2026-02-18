@@ -3,7 +3,7 @@
  * Open Web UI authentication (no SSO)
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -18,11 +18,17 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 
 export function LoginScreen() {
-  const { login } = useAuth();
+  const { login, baseUrl: storedBaseUrl } = useAuth();
   const [baseUrl, setBaseUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    if (storedBaseUrl) {
+      setBaseUrl(storedBaseUrl);
+    }
+  }, [storedBaseUrl]);
 
   const handleLogin = async () => {
     const trimmedUrl = baseUrl.trim();

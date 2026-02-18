@@ -29,6 +29,7 @@ interface AuthContextType extends AuthState {
   ) => Promise<void>;
   logout: () => Promise<void>;
   setBaseUrl: (url: string) => void;
+  updateInstanceUrl: (url: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -119,6 +120,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setState((prev) => ({ ...prev, baseUrl: normalized }));
   }, []);
 
+  const updateInstanceUrl = useCallback(async (newUrl: string) => {
+    const normalized = newUrl.replace(/\/$/, '');
+    await AsyncStorage.setItem(STORAGE_KEYS.BASE_URL, normalized);
+    await AsyncStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
+    await AsyncStorage.removeItem(STORAGE_KEYS.USER);
+    apiClient.setToken(null);
+    apiClient.setBaseUrl(normalized);
+    setState({
+      isAuthenticated: false,
+      isLoading: false,
+      baseUrl: normalized,
+      username: null,
+    });
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{
@@ -126,6 +142,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         login,
         logout,
         setBaseUrl,
+        updateInstanceUrl,
       }}
     >
       {children}
