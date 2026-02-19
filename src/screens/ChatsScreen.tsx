@@ -3,7 +3,7 @@
  * Access all chats and create new chat
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,10 +12,12 @@ import {
   StyleSheet,
   ActivityIndicator,
   RefreshControl,
+  TextInput,
 } from 'react-native';
+import Icon from 'react-native-vector-icons/Feather';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useAuth } from '../contexts/AuthContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiClient } from '../api/client';
 import type { Chat } from '../types/api';
 import type { RootStackParamList } from '../navigation/types';
@@ -27,13 +29,15 @@ type NavigationProp = NativeStackNavigationProp<
 
 export function ChatsScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { logout } = useAuth();
+  const insets = useSafeAreaInsets();
 
   const openSettings = () => navigation.navigate('Settings');
   const [chats, setChats] = useState<Chat[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const listRef = useRef<FlatList>(null);
 
   const fetchChats = useCallback(async () => {
     try {
@@ -87,6 +91,13 @@ export function ChatsScreen() {
     }
   };
 
+  const filteredChats = chats.filter((chat) => {
+    if (!searchQuery.trim()) return true;
+    const query = searchQuery.toLowerCase();
+    const title = (chat.title || 'New Chat').toLowerCase();
+    return title.includes(query);
+  });
+
   const renderChatItem = ({ item }: { item: Chat }) => (
     <TouchableOpacity
       style={styles.chatItem}
@@ -104,30 +115,25 @@ export function ChatsScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Chats</Text>
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            style={styles.headerButton}
-            onPress={openSettings}
-          >
-            <Text style={styles.headerButtonText}>⚙️</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.logoutButton} onPress={logout}>
-            <Text style={styles.logoutText}>Logout</Text>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          style={styles.headerButton}
+          onPress={openSettings}
+        >
+          <Icon name="settings" size={22} color="#f0f6fc" />
+        </TouchableOpacity>
       </View>
 
-      <TouchableOpacity
-        style={[styles.newChatButton, isCreating && styles.buttonDisabled]}
-        onPress={handleCreateChat}
-        disabled={isCreating}
-      >
-        {isCreating ? (
-          <ActivityIndicator size="small" color="#fff" />
-        ) : (
-          <Text style={styles.newChatText}>+ New Chat</Text>
-        )}
-      </TouchableOpacity>
+      <View style={styles.searchContainer}>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search chats..."
+          placeholderTextColor="#8b949e"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+      </View>
 
       {isLoading ? (
         <View style={styles.center}>
@@ -135,13 +141,19 @@ export function ChatsScreen() {
         </View>
       ) : (
         <FlatList
-          data={chats}
+          ref={listRef}
+          data={filteredChats}
           renderItem={renderChatItem}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[
+            styles.list,
+            { paddingBottom: 100 + insets.bottom },
+          ]}
           ListEmptyComponent={
             <Text style={styles.emptyText}>
-              No chats yet. Create one to get started.
+              {searchQuery
+                ? `No chats found matching "${searchQuery}"`
+                : 'No chats yet. Create one to get started.'}
             </Text>
           }
           refreshControl={
@@ -153,6 +165,22 @@ export function ChatsScreen() {
           }
         />
       )}
+      
+      <TouchableOpacity
+        style={[
+          styles.newChatButton,
+          { bottom: 20 + insets.bottom },
+          isCreating && styles.buttonDisabled,
+        ]}
+        onPress={handleCreateChat}
+        disabled={isCreating}
+      >
+        {isCreating ? (
+          <ActivityIndicator size="small" color="#fff" />
+        ) : (
+          <Text style={styles.newChatText}>+ New Chat</Text>
+        )}
+      </TouchableOpacity>
     </View>
   );
 }
@@ -176,30 +204,42 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#f0f6fc',
   },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
   headerButton: {
     padding: 8,
   },
-  headerButtonText: {
-    fontSize: 20,
+  searchContainer: {
+    backgroundColor: '#0d1117',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 12,
+    zIndex: 10,
   },
-  logoutButton: {
-    padding: 8,
-  },
-  logoutText: {
-    color: '#58a6ff',
+  searchInput: {
+    backgroundColor: '#161b22',
+    borderRadius: 8,
+    padding: 12,
     fontSize: 16,
+    color: '#f0f6fc',
+    borderWidth: 1,
+    borderColor: '#21262d',
   },
   newChatButton: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
     backgroundColor: '#238636',
-    margin: 16,
     padding: 16,
     borderRadius: 8,
     alignItems: 'center',
+    zIndex: 1000,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
   buttonDisabled: {
     opacity: 0.7,
@@ -210,8 +250,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   list: {
-    padding: 16,
-    paddingBottom: 32,
+    paddingHorizontal: 16,
+    paddingTop: 0,
+    paddingBottom: 100, // Extra padding so items aren't hidden behind floating button
   },
   chatItem: {
     backgroundColor: '#161b22',

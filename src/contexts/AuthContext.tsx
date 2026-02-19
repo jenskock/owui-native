@@ -19,6 +19,7 @@ interface AuthState {
   isLoading: boolean;
   baseUrl: string | null;
   username: string | null;
+  defaultModelId: string | null;
 }
 
 interface AuthContextType extends AuthState {
@@ -30,6 +31,7 @@ interface AuthContextType extends AuthState {
   logout: () => Promise<void>;
   setBaseUrl: (url: string) => void;
   updateInstanceUrl: (url: string) => Promise<void>;
+  setDefaultModel: (modelId: string | null) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -40,14 +42,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isLoading: true,
     baseUrl: null,
     username: null,
+    defaultModelId: null,
   });
 
   const loadStoredAuth = useCallback(async () => {
     try {
-      const [token, baseUrl, user] = await Promise.all([
+      const [token, baseUrl, user, defaultModelId] = await Promise.all([
         AsyncStorage.getItem(STORAGE_KEYS.AUTH_TOKEN),
         AsyncStorage.getItem(STORAGE_KEYS.BASE_URL),
         AsyncStorage.getItem(STORAGE_KEYS.USER),
+        AsyncStorage.getItem(STORAGE_KEYS.DEFAULT_MODEL),
       ]);
       if (token && baseUrl) {
         apiClient.setToken(token);
@@ -57,9 +61,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           isLoading: false,
           baseUrl,
           username: user ?? null,
+          defaultModelId: defaultModelId ?? null,
         });
       } else {
-        setState((prev) => ({ ...prev, isLoading: false }));
+        setState((prev) => ({
+          ...prev,
+          isLoading: false,
+          defaultModelId: defaultModelId ?? null,
+        }));
       }
     } catch {
       setState((prev) => ({ ...prev, isLoading: false }));
@@ -75,10 +84,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setState((prev) => ({ ...prev, isLoading: true }));
       try {
         const response = await apiClient.login(baseUrl, {
-          username,
+          email: username,
           password,
         });
-        const token = response.access_token;
+        const token = response.token;
         const normalizedUrl = baseUrl.replace(/\/$/, '');
         await Promise.all([
           AsyncStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, token),
@@ -87,11 +96,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         ]);
         apiClient.setToken(token);
         apiClient.setBaseUrl(normalizedUrl);
+        const storedDefault = await AsyncStorage.getItem(STORAGE_KEYS.DEFAULT_MODEL);
         setState({
           isAuthenticated: true,
           isLoading: false,
           baseUrl: normalizedUrl,
           username,
+          defaultModelId: storedDefault ?? null,
         });
       } finally {
         setState((prev) => (prev.isLoading ? { ...prev, isLoading: false } : prev));
@@ -132,7 +143,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isLoading: false,
       baseUrl: normalized,
       username: null,
+      defaultModelId: state.defaultModelId,
     });
+  }, [state.defaultModelId]);
+
+  const setDefaultModel = useCallback(async (modelId: string | null) => {
+    if (modelId !== null) {
+      await AsyncStorage.setItem(STORAGE_KEYS.DEFAULT_MODEL, modelId);
+    } else {
+      await AsyncStorage.removeItem(STORAGE_KEYS.DEFAULT_MODEL);
+    }
+    setState((prev) => ({ ...prev, defaultModelId: modelId }));
   }, []);
 
   return (
@@ -143,6 +164,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         logout,
         setBaseUrl,
         updateInstanceUrl,
+        setDefaultModel,
       }}
     >
       {children}

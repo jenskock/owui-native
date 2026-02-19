@@ -1,6 +1,6 @@
 /**
  * Login screen
- * Open Web UI authentication (no SSO)
+ * OWUI Native authentication (no SSO)
  */
 
 import React, { useState, useEffect } from 'react';
@@ -59,7 +59,7 @@ export function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={styles.content}>
-        <Text style={styles.title}>Open Web UI</Text>
+        <Text style={styles.title}>OWUI Native</Text>
         <Text style={styles.subtitle}>Sign in to your instance</Text>
 
         <TextInput

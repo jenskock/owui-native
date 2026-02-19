@@ -8,6 +8,6 @@ import { Text } from 'react-native';
 
 test('renders correctly', async () => {
   await ReactTestRenderer.act(() => {
-    ReactTestRenderer.create(<Text>Open Web UI</Text>);
+    ReactTestRenderer.create(<Text>OWUI Native</Text>);
   });
 });

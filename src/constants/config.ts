@@ -6,11 +6,14 @@ export const STORAGE_KEYS = {
   AUTH_TOKEN: '@owui_auth_token',
   BASE_URL: '@owui_base_url',
   USER: '@owui_user',
+  DEFAULT_MODEL: '@owui_default_model',
 } as const;
 
 export const API_ENDPOINTS = {
-  LOGIN: '/api/login',
-  CHATS: '/api/chats',
-  CHAT: '/api/chat',
+  LOGIN: '/api/v1/auths/signin',
+  /** List: GET ?page=1; create: POST /new; get/update: GET/POST /:id */
+  CHATS: '/api/v1/chats',
+  /** Send/stream messages */
+  CHAT_COMPLETIONS: '/api/chat/completions',
   MODELS: '/api/models',
 } as const;

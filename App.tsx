@@ -1,5 +1,5 @@
 /**
- * Open Web UI - Native iOS Client
+ * OWUI Native - Native iOS Client
  * React Native app with auth, chats, streaming, and file upload
  *
  * @format

@@ -1,24 +1,49 @@
 /**
- * Open Web UI API types
- * Based on Open Web UI API structure
+ * OWUI Native API types
+ * Based on OWUI Native API structure
  */
 
 export interface LoginRequest {
-  username: string;
+  email: string;
   password: string;
 }
 
 export interface LoginResponse {
-  access_token: string;
-  token_type: string;
+  token: string;
+  token_type?: string;
 }
 
+/** Normalized chat for app (create_time/update_time as ISO strings) */
 export interface Chat {
   id: string;
   title: string;
   create_time: string;
   update_time?: string;
   chat_model_id?: string;
+  [key: string]: unknown;
+}
+
+/** Raw list item from GET /api/v1/chats/ (created_at/updated_at are Unix seconds) */
+export interface ChatListItem {
+  id: string;
+  title: string;
+  created_at: number;
+  updated_at: number;
+  [key: string]: unknown;
+}
+
+/** Full chat from GET/POST /api/v1/chats/:id or POST /api/v1/chats/new */
+export interface ChatDetail {
+  id: string;
+  user_id?: string;
+  title: string;
+  chat?: {
+    messages?: Array<{ id?: string; role: string; content: string; [key: string]: unknown }>;
+    history?: { messages?: Record<string, unknown> };
+    [key: string]: unknown;
+  };
+  created_at?: number;
+  updated_at?: number;
   [key: string]: unknown;
 }
 
