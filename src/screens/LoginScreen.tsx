@@ -3,7 +3,7 @@
  * OWUI Native authentication (no SSO)
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,8 +16,64 @@ import {
   Alert,
 } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
+import type { ColorPalette } from '../constants/colors';
+
+function createStyles(colors: ColorPalette) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+      justifyContent: 'center',
+      padding: 24,
+    },
+    content: {
+      maxWidth: 400,
+      width: '100%',
+      alignSelf: 'center',
+    },
+    title: {
+      fontSize: 28,
+      fontWeight: '700',
+      color: colors.text,
+      marginBottom: 8,
+    },
+    subtitle: {
+      fontSize: 16,
+      color: colors.textSecondary,
+      marginBottom: 32,
+    },
+    input: {
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+      padding: 16,
+      fontSize: 16,
+      color: colors.text,
+      marginBottom: 16,
+    },
+    button: {
+      backgroundColor: colors.buttonPrimary,
+      borderRadius: 8,
+      padding: 16,
+      alignItems: 'center',
+      marginTop: 8,
+    },
+    buttonDisabled: {
+      opacity: 0.7,
+    },
+    buttonText: {
+      color: colors.buttonPrimaryText,
+      fontSize: 16,
+      fontWeight: '600',
+    },
+  });
+}
 
 export function LoginScreen() {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const { login, baseUrl: storedBaseUrl } = useAuth();
   const [baseUrl, setBaseUrl] = useState('');
   const [username, setUsername] = useState('');
@@ -65,7 +121,7 @@ export function LoginScreen() {
         <TextInput
           style={styles.input}
           placeholder="Instance URL (e.g. https://openwebui.example.com)"
-          placeholderTextColor="#888"
+          placeholderTextColor={colors.placeholder}
           value={baseUrl}
           onChangeText={setBaseUrl}
           autoCapitalize="none"
@@ -76,7 +132,7 @@ export function LoginScreen() {
         <TextInput
           style={styles.input}
           placeholder="Username"
-          placeholderTextColor="#888"
+          placeholderTextColor={colors.placeholder}
           value={username}
           onChangeText={setUsername}
           autoCapitalize="none"
@@ -86,7 +142,7 @@ export function LoginScreen() {
         <TextInput
           style={styles.input}
           placeholder="Password"
-          placeholderTextColor="#888"
+          placeholderTextColor={colors.placeholder}
           value={password}
           onChangeText={setPassword}
           secureTextEntry
@@ -99,7 +155,7 @@ export function LoginScreen() {
           disabled={isLoading}
         >
           {isLoading ? (
-            <ActivityIndicator color="#fff" />
+            <ActivityIndicator color={colors.buttonPrimaryText} />
           ) : (
             <Text style={styles.buttonText}>Sign In</Text>
           )}
@@ -108,53 +164,3 @@ export function LoginScreen() {
     </KeyboardAvoidingView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0d1117',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  content: {
-    maxWidth: 400,
-    width: '100%',
-    alignSelf: 'center',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#f0f6fc',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#8b949e',
-    marginBottom: 32,
-  },
-  input: {
-    backgroundColor: '#161b22',
-    borderWidth: 1,
-    borderColor: '#30363d',
-    borderRadius: 8,
-    padding: 16,
-    fontSize: 16,
-    color: '#f0f6fc',
-    marginBottom: 16,
-  },
-  button: {
-    backgroundColor: '#238636',
-    borderRadius: 8,
-    padding: 16,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  buttonDisabled: {
-    opacity: 0.7,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-});

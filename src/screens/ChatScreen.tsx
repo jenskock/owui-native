@@ -3,7 +3,7 @@
  * Model selection, response streaming, file upload
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,17 +12,19 @@ import {
   StyleSheet,
   FlatList,
   ActivityIndicator,
-  KeyboardAvoidingView,
+  Keyboard,
   Platform,
-  ScrollView,
   Alert,
-  Modal,
   ActionSheetIOS,
+  Image,
+  Modal,
+  Dimensions,
 } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import Icon from 'react-native-vector-icons/Feather';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   pick,
   keepLocalCopy,
@@ -30,14 +32,127 @@ import {
   isErrorWithCode,
   errorCodes,
 } from '@react-native-documents/picker';
-import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
+import { launchCamera, launchImageLibrary, type PhotoQuality } from 'react-native-image-picker';
 import RNFS from 'react-native-fs';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
 import { apiClient } from '../api/client';
 import type { Message, ModelInfo } from '../types/api';
 import type { RootStackParamList } from '../navigation/types';
+import type { ColorPalette } from '../constants/colors';
+import { ListPicker } from '../components/ListPicker';
 
 type ChatRouteProp = RouteProp<RootStackParamList, 'Chat'>;
+
+// Component to render authenticated images
+function AuthenticatedImage({ 
+  url, 
+  style,
+  onPress,
+  resizeMode = 'cover'
+}: { 
+  url: string; 
+  style: any;
+  onPress?: () => void;
+  resizeMode?: 'cover' | 'contain' | 'stretch' | 'repeat' | 'center';
+}) {
+  const [imageUri, setImageUri] = React.useState<string>(url);
+  const [isLoading, setIsLoading] = React.useState(!url.startsWith('data:'));
+  const [error, setError] = React.useState<string | null>(null);
+
+  // For HTTP URLs or file IDs, fetch with auth and convert to data URL
+  React.useEffect(() => {
+    // If it's already a data URL, we're done
+    if (url.startsWith('data:')) {
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    // Convert file ID to full URL if needed
+    const loadImage = async () => {
+      try {
+        let imageUrl = url;
+        
+        // If it's not an HTTP URL, it might be a file ID - convert to full URL
+        if (!url.startsWith('http')) {
+          imageUrl = await apiClient.getFileUrl(url);
+        }
+
+        // Fetch and convert to data URL
+        const dataUrl = await apiClient.fetchImageAsDataUrl(imageUrl);
+        if (dataUrl) {
+          setImageUri(dataUrl);
+          setError(null);
+        } else {
+          setError('Failed to fetch image');
+        }
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+        console.error('Error fetching authenticated image:', errorMsg);
+        setError(`Fetch: ${errorMsg.substring(0, 50)}`);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadImage();
+  }, [url]);
+
+  if (isLoading) {
+    return (
+      <View style={[style, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.1)' }]}>
+        <ActivityIndicator size="small" />
+      </View>
+    );
+  }
+
+  const imageComponent = (
+    <Image
+      source={{ uri: imageUri }}
+      style={style}
+      resizeMode={resizeMode}
+      onError={(imgError) => {
+        const errorMsg = imgError.nativeEvent?.error || 'Unknown error';
+        const fullError = `Image decode error: ${String(errorMsg)}\nURL: ${url.substring(0, 100)}`;
+        console.error(fullError);
+        setError(`Decode: ${String(errorMsg).substring(0, 50)}`);
+      }}
+      onLoad={() => {
+        setError(null);
+        console.log('Image loaded successfully');
+      }}
+    />
+  );
+
+  return (
+    <View style={{ position: 'relative' }}>
+      {onPress ? (
+        <TouchableOpacity onPress={onPress} activeOpacity={0.9}>
+          {imageComponent}
+        </TouchableOpacity>
+      ) : (
+        imageComponent
+      )}
+      {error && (
+        <View style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 8,
+        }}>
+          <Text style={{ color: 'white', fontSize: 10, textAlign: 'center' }}>{error}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
 
 interface PickedFile {
   uri: string;
@@ -46,11 +161,229 @@ interface PickedFile {
   base64?: string;
 }
 
+function createMarkdownStyles(colors: ColorPalette) {
+  return StyleSheet.create({
+    body: { color: colors.text, fontSize: 16 },
+    paragraph: { marginTop: 0, marginBottom: 8 },
+    strong: { color: colors.text, fontWeight: '700' },
+    em: { color: colors.text, fontStyle: 'italic' },
+    s: { color: colors.textSecondary },
+    link: { color: colors.link },
+    blockquote: { backgroundColor: colors.codeBackground, borderLeftColor: colors.primary, paddingLeft: 12, marginVertical: 8 },
+    code_inline: { backgroundColor: colors.codeBackground, color: colors.codeAccent, paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4, fontSize: 14 },
+    code_block: { backgroundColor: colors.codeBackground, color: colors.codeText, padding: 12, borderRadius: 8, marginVertical: 8, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 14 },
+    fence: { backgroundColor: colors.codeBackground, color: colors.codeText, padding: 12, borderRadius: 8, marginVertical: 8, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 14 },
+    bullet_list_icon: { color: colors.text },
+    ordered_list_icon: { color: colors.text },
+    list_item: { color: colors.text },
+    heading1: { color: colors.text, fontSize: 24, fontWeight: '700', marginTop: 16, marginBottom: 8 },
+    heading2: { color: colors.text, fontSize: 20, fontWeight: '600', marginTop: 14, marginBottom: 6 },
+    heading3: { color: colors.text, fontSize: 18, fontWeight: '600', marginTop: 12, marginBottom: 4 },
+    hr: { backgroundColor: colors.surfaceVariant, marginVertical: 12 },
+    table: { borderColor: colors.surfaceVariant },
+    th: { color: colors.text, borderColor: colors.surfaceVariant, padding: 8 },
+    td: { color: colors.text, borderColor: colors.surfaceVariant, padding: 8 },
+  });
+}
+
+function createStyles(colors: ColorPalette) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    center: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      padding: 16,
+      paddingTop: 60,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.surfaceVariant,
+      gap: 12,
+    },
+    backText: {
+      color: colors.primary,
+      fontSize: 16,
+    },
+    modelButton: {
+      flex: 1,
+      backgroundColor: colors.surface,
+      padding: 12,
+      borderRadius: 8,
+    },
+    modelButtonText: {
+      color: colors.text,
+      fontSize: 14,
+    },
+    messagesList: {
+      padding: 16,
+      paddingBottom: 24,
+    },
+    messageBubble: {
+      padding: 12,
+      borderRadius: 12,
+      marginBottom: 12,
+      maxWidth: '85%',
+    },
+    userBubble: {
+      alignSelf: 'flex-end',
+      backgroundColor: colors.buttonPrimary,
+    },
+    assistantBubble: {
+      alignSelf: 'flex-start',
+      backgroundColor: colors.surfaceVariant,
+    },
+    messageRole: {
+      fontSize: 12,
+      color: colors.textSecondary,
+      marginBottom: 4,
+    },
+    userMessageRole: {
+      fontSize: 12,
+      color: colors.buttonPrimaryText,
+      marginBottom: 4,
+    },
+    messageContent: {
+      fontSize: 16,
+      color: colors.text,
+    },
+    userMessageContent: {
+      fontSize: 16,
+      color: colors.buttonPrimaryText,
+    },
+    messageImage: {
+      width: 200,
+      height: 200,
+      borderRadius: 8,
+      marginTop: 8,
+      marginBottom: 4,
+      backgroundColor: 'rgba(0,0,0,0.1)',
+    },
+    messageImageContainer: {
+      marginTop: 4,
+      marginBottom: 4,
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+    },
+    attachments: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      padding: 8,
+      gap: 8,
+      backgroundColor: colors.background,
+    },
+    attachmentsPositioned: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+    },
+    attachmentChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surfaceVariant,
+      padding: 8,
+      borderRadius: 8,
+      gap: 8,
+    },
+    attachmentName: {
+      color: colors.text,
+      maxWidth: 120,
+    },
+    removeAttachment: {
+      color: colors.error,
+      fontSize: 18,
+    },
+    inputRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      paddingHorizontal: 12,
+      paddingTop: 8,
+      paddingBottom: 8,
+      borderTopWidth: 1,
+      borderTopColor: colors.surfaceVariant,
+      gap: 8,
+      backgroundColor: colors.background,
+    },
+    inputRowPositioned: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+    },
+    attachButton: {
+      padding: 10,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    input: {
+      flex: 1,
+      minHeight: 40,
+      backgroundColor: colors.surfaceVariant,
+      borderRadius: 20,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      fontSize: 16,
+      lineHeight: 20,
+      color: colors.text,
+      maxHeight: 100,
+      textAlignVertical: 'center',
+      includeFontPadding: false,
+      borderWidth: 0,
+    },
+    sendButton: {
+      backgroundColor: colors.buttonPrimary,
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    sendDisabled: {
+      opacity: 0.7,
+    },
+    sendText: {
+      color: colors.buttonPrimaryText,
+      fontWeight: '600',
+    },
+    fullScreenImageContainer: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.95)',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    fullScreenImageCloseButton: {
+      position: 'absolute',
+      top: 60,
+      right: 16,
+      zIndex: 1000,
+      backgroundColor: 'rgba(0,0,0,0.5)',
+      borderRadius: 20,
+      width: 40,
+      height: 40,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    fullScreenImage: {
+      width: Dimensions.get('window').width,
+      height: Dimensions.get('window').height,
+    },
+  });
+}
+
 export function ChatScreen() {
   const route = useRoute<ChatRouteProp>();
   const navigation = useNavigation();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  const markdownStyles = useMemo(() => createMarkdownStyles(colors), [colors]);
   const { defaultModelId } = useAuth();
   const { chatId } = route.params;
+  const insets = useSafeAreaInsets();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
@@ -63,8 +396,26 @@ export function ChatScreen() {
   const [isSending, setIsSending] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [showModelPicker, setShowModelPicker] = useState(false);
-  const [modelSearchQuery, setModelSearchQuery] = useState('');
   const [attachedFiles, setAttachedFiles] = useState<PickedFile[]>([]);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [inputRowHeight, setInputRowHeight] = useState(88);
+  const [fullScreenImageUrl, setFullScreenImageUrl] = useState<string | null>(null);
+  const messagesListRef = useRef<FlatList>(null);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      setKeyboardHeight(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const loadChat = useCallback(async () => {
     try {
@@ -108,6 +459,15 @@ export function ChatScreen() {
   }, [loadChat]);
 
   useEffect(() => {
+    if (!isLoading && messages.length > 0) {
+      const t = setTimeout(() => {
+        messagesListRef.current?.scrollToEnd({ animated: false });
+      }, 100);
+      return () => clearTimeout(t);
+    }
+  }, [isLoading, messages.length]);
+
+  useEffect(() => {
     loadModels();
   }, [loadModels]);
 
@@ -123,6 +483,9 @@ export function ChatScreen() {
   const imagePickerOptions = {
     mediaType: 'photo' as const,
     includeBase64: true,
+    quality: 0.7 as PhotoQuality, // Compress to 70% quality to reduce file size
+    maxWidth: 2048, // Limit width to reduce payload size
+    maxHeight: 2048, // Limit height to reduce payload size
   };
 
   const pickCamera = async () => {
@@ -168,11 +531,12 @@ export function ChatScreen() {
         allowMultiSelection: true,
       });
       if (result.length === 0) return;
+      const mappedFiles = result.map((f) => ({
+        uri: f.uri,
+        fileName: f.name ?? 'file',
+      }));
       const copyResults = await keepLocalCopy({
-        files: result.map((f) => ({
-          uri: f.uri,
-          fileName: f.name ?? 'file',
-        })),
+        files: mappedFiles as [typeof mappedFiles[0], ...(typeof mappedFiles[0])[]],
         destination: 'documentDirectory',
       });
       const files: PickedFile[] = [];
@@ -286,6 +650,15 @@ export function ChatScreen() {
         { role: 'assistant', content: fullContent },
       ]);
       setStreamingContent('');
+      
+      // Reload chat to get the complete message with files attached
+      // This ensures we have the full message structure including any images/files
+      try {
+        await loadChat();
+      } catch (error) {
+        console.error('Failed to reload chat after streaming:', error);
+        // Continue anyway - we already have the content
+      }
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Failed to send';
       Alert.alert('Error', msg);
@@ -295,15 +668,6 @@ export function ChatScreen() {
     }
   };
 
-  const filteredModels = useMemo(() => {
-    if (!modelSearchQuery.trim()) return models;
-    const query = modelSearchQuery.toLowerCase();
-    return models.filter(
-      (m) =>
-        m.name.toLowerCase().includes(query) ||
-        m.id.toLowerCase().includes(query)
-    );
-  }, [models, modelSearchQuery]);
 
   const displayMessages = streamingContent
     ? [
@@ -313,15 +677,98 @@ export function ChatScreen() {
     : messages;
 
   const renderMessage = ({ item }: { item: Message }) => {
-    const content =
-      typeof item.content === 'string'
-        ? item.content
-        : Array.isArray(item.content)
-          ? item.content
-              .map((p) => (typeof p === 'string' ? p : '[File]'))
-              .join('\n')
-          : '';
     const isUser = item.role === 'user';
+    let contentArray: unknown[] | null = null;
+    
+    // Handle content - could be string, array, or JSON string
+    if (Array.isArray(item.content)) {
+      contentArray = item.content as unknown[];
+      console.log('Message content is array:', item.role, contentArray.length, 'parts');
+    } else if (typeof item.content === 'string') {
+      // Try to parse if it's a JSON string
+      try {
+        const parsed = JSON.parse(item.content);
+        if (Array.isArray(parsed)) {
+          contentArray = parsed;
+          console.log('Message content parsed as array:', item.role, contentArray.length, 'parts');
+        }
+      } catch {
+        // Not JSON, treat as plain text
+      }
+    }
+    
+    // Debug: log files if present
+    if (item.files && Array.isArray(item.files)) {
+      console.log('Message has files:', item.role, item.files.length, 'files');
+    }
+    
+
+    const textParts: string[] = [];
+    const imageUrls: string[] = [];
+
+    // Handle images from content array (for newly sent messages with base64 data URLs or file IDs)
+    if (contentArray) {
+      console.log('Processing content array with', contentArray.length, 'parts');
+      for (const part of contentArray) {
+        if (typeof part === 'string') {
+          textParts.push(part);
+        } else if (part && typeof part === 'object' && part !== null) {
+          const partObj = part as Record<string, unknown>;
+          console.log('Content part type:', partObj.type, 'Keys:', Object.keys(partObj));
+          
+          if (partObj.type === 'image_url' && 'image_url' in partObj) {
+            const imageUrl = partObj.image_url as { url?: string };
+            if (imageUrl?.url) {
+              // If it's a data URL, use it directly
+              // If it's just a file ID (UUID format), convert to full URL
+              // Otherwise, use as-is (might be full URL)
+              let finalUrl = imageUrl.url;
+              if (!finalUrl.startsWith('data:') && !finalUrl.startsWith('http')) {
+                // Looks like a file ID, convert to full URL
+                // AuthenticatedImage will handle the conversion if needed
+                finalUrl = imageUrl.url;
+              }
+              console.log('Found image_url in content array:', finalUrl);
+              imageUrls.push(finalUrl);
+            }
+          } else if (partObj.type === 'text' && 'text' in partObj && typeof partObj.text === 'string') {
+            textParts.push(partObj.text);
+          } else if (partObj.type === 'file' && ('id' in partObj || 'url' in partObj)) {
+            // Handle file type in content array
+            const fileId = partObj.id as string | undefined;
+            const fileUrl = partObj.url as string | undefined;
+            if (fileId || fileUrl) {
+              // If we have a full URL, use it; otherwise construct from file ID
+              // The AuthenticatedImage component will handle URL construction if needed
+              const finalUrl = fileUrl?.startsWith('http') ? fileUrl : fileId || fileUrl || '';
+              if (finalUrl) {
+                console.log('Found file in content array:', finalUrl);
+                imageUrls.push(finalUrl);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Handle files from API (for messages loaded from server)
+    if (item.files && Array.isArray(item.files)) {
+      for (const file of item.files) {
+        // Check if it's an image based on content_type or file extension
+        const isImage = file.content_type?.startsWith('image/') || 
+                       (file.name && /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(file.name));
+        if (isImage && file.url) {
+          console.log('Found image file:', file.url, 'content_type:', file.content_type);
+          imageUrls.push(file.url);
+        }
+      }
+    }
+
+    const textContent = contentArray
+      ? textParts.join('\n')
+      : typeof item.content === 'string'
+        ? item.content
+        : '';
 
     return (
       <View
@@ -330,15 +777,30 @@ export function ChatScreen() {
           isUser ? styles.userBubble : styles.assistantBubble,
         ]}
       >
-        <Text style={styles.messageRole}>
+        <Text style={isUser ? styles.userMessageRole : styles.messageRole}>
           {isUser ? 'You' : 'Assistant'}
         </Text>
-        {isUser ? (
-          <Text style={styles.messageContent}>{content}</Text>
-        ) : (
-          <Markdown style={markdownStyles} mergeStyle={true}>
-            {content}
-          </Markdown>
+        {textContent ? (
+          isUser ? (
+            <Text style={styles.userMessageContent}>{textContent}</Text>
+          ) : (
+            <Markdown style={markdownStyles} mergeStyle={true}>
+              {textContent}
+            </Markdown>
+          )
+        ) : null}
+        {imageUrls.length > 0 && (
+          <View style={styles.messageImageContainer}>
+            {imageUrls.map((url, index) => (
+              <View key={index} style={{ position: 'relative' }}>
+                <AuthenticatedImage
+                  url={url}
+                  style={styles.messageImage}
+                  onPress={() => setFullScreenImageUrl(url)}
+                />
+              </View>
+            ))}
+          </View>
         )}
       </View>
     );
@@ -347,17 +809,17 @@ export function ChatScreen() {
   if (isLoading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#58a6ff" />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
 
+  // Approximate height of input row + attachments so list can scroll above them
+  const inputAreaHeight = inputRowHeight + (attachedFiles.length > 0 ? 52 : 0);
+  const listBottomPadding = 16 + inputAreaHeight + keyboardHeight + (keyboardHeight > 0 ? 0 : insets.bottom);
+
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={90}
-    >
+    <View style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Text style={styles.backText}>← Back</Text>
@@ -376,113 +838,51 @@ export function ChatScreen() {
         </TouchableOpacity>
       </View>
 
-      <Modal
+      <ListPicker
         visible={showModelPicker}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowModelPicker(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Model</Text>
-              <TouchableOpacity
-                onPress={() => {
-                  setShowModelPicker(false);
-                  setModelSearchQuery('');
-                }}
-                style={styles.modalCloseButton}
-              >
-                <Text style={styles.modalCloseText}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <TextInput
-              style={styles.modelSearchInput}
-              placeholder="Search models..."
-              placeholderTextColor="#8b949e"
-              value={modelSearchQuery}
-              onChangeText={setModelSearchQuery}
-              autoFocus
-            />
-            {modelsLoading ? (
-              <View style={styles.emptyModelsContainer}>
-                <ActivityIndicator size="large" color="#58a6ff" />
-                <Text style={styles.emptyModelsText}>Loading models...</Text>
-              </View>
-            ) : (
-              <View style={styles.modelListWrapper}>
-                <FlatList
-                  data={filteredModels}
-                  keyExtractor={(item) => item.id}
-                  renderItem={({ item }) => (
-                  <TouchableOpacity
-                    style={[
-                      styles.modelListItem,
-                      selectedModel === item.id && styles.modelListItemSelected,
-                    ]}
-                    onPress={() => {
-                      setSelectedModel(item.id);
-                      setShowModelPicker(false);
-                      setModelSearchQuery('');
-                    }}
-                  >
-                    <Text
-                      style={[
-                        styles.modelListItemText,
-                        selectedModel === item.id && styles.modelListItemTextSelected,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {item.name}
-                    </Text>
-                    {selectedModel === item.id && (
-                      <Text style={styles.modelListItemCheck}>✓</Text>
-                    )}
-                  </TouchableOpacity>
-                )}
-                ListEmptyComponent={
-                  <View style={styles.emptyModelsContainer}>
-                    <Text style={styles.emptyModelsText}>
-                      {modelSearchQuery
-                        ? `No models found matching "${modelSearchQuery}"`
-                        : models.length === 0
-                          ? 'No models available. Please check your connection.'
-                          : 'No models match your search.'}
-                    </Text>
-                    {models.length === 0 && (
-                      <TouchableOpacity
-                        style={styles.retryButton}
-                        onPress={() => loadModels()}
-                      >
-                        <Text style={styles.retryButtonText}>Retry</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                }
-                  style={styles.modelList}
-                />
-              </View>
-            )}
-          </View>
-        </View>
-      </Modal>
+        title="Select Model"
+        items={models.map((m) => ({ ...m, label: m.name }))}
+        selectedId={selectedModel ?? null}
+        onSelect={(id) => {
+          setSelectedModel(id ?? undefined);
+        }}
+        onClose={() => setShowModelPicker(false)}
+        searchPlaceholder="Search models..."
+        emptyMessage={
+          models.length === 0
+            ? 'No models available. Please check your connection.'
+            : 'No models match your search.'
+        }
+        loading={modelsLoading}
+        loadingMessage="Loading models..."
+        searchFilter={(item, query) => {
+          const lowerQuery = query.toLowerCase();
+          return (
+            item.label.toLowerCase().includes(lowerQuery) ||
+            item.id.toLowerCase().includes(lowerQuery)
+          );
+        }}
+      />
 
       <FlatList
+        ref={messagesListRef}
         data={displayMessages}
         renderItem={renderMessage}
         keyExtractor={(_, i) => i.toString()}
-        contentContainerStyle={styles.messagesList}
-        ListFooterComponent={
-          isSending && !streamingContent ? (
-            <View style={styles.messageBubble}>
-              <ActivityIndicator size="small" color="#58a6ff" />
-            </View>
-          ) : null
-        }
+        contentContainerStyle={[styles.messagesList, { paddingBottom: listBottomPadding }]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+        ListFooterComponent={null}
       />
 
       {attachedFiles.length > 0 && (
-        <View style={styles.attachments}>
+        <View
+          style={[
+            styles.attachments,
+            styles.attachmentsPositioned,
+            { bottom: (keyboardHeight > 0 ? keyboardHeight : 0) + inputRowHeight },
+          ]}
+        >
           {attachedFiles.map((f, i) => (
             <View key={i} style={styles.attachmentChip}>
               <Text style={styles.attachmentName} numberOfLines={1}>
@@ -496,18 +896,33 @@ export function ChatScreen() {
         </View>
       )}
 
-      <View style={styles.inputRow}>
+      <View
+        style={[
+          styles.inputRow,
+          styles.inputRowPositioned,
+          {
+            paddingBottom: 8 + (keyboardHeight > 0 ? 0 : insets.bottom),
+            bottom: keyboardHeight > 0 ? keyboardHeight : 0,
+          },
+        ]}
+        onLayout={(e) => {
+          const height = e.nativeEvent.layout.height;
+          if (height > 0) {
+            setInputRowHeight(height);
+          }
+        }}
+      >
         <TouchableOpacity style={styles.attachButton} onPress={showAttachOptions}>
-          <Icon name="paperclip" size={24} color="#f0f6fc" />
+          <Icon name="paperclip" size={24} color={colors.text} />
         </TouchableOpacity>
         <TextInput
           style={styles.input}
           placeholder="Message..."
-          placeholderTextColor="#8b949e"
+          placeholderTextColor={colors.placeholder}
           value={inputText}
           onChangeText={setInputText}
           multiline
-          textAlignVertical="top"
+          textAlignVertical="center"
           maxLength={4000}
           editable={!isSending}
         />
@@ -517,256 +932,36 @@ export function ChatScreen() {
           disabled={isSending}
         >
           {isSending ? (
-            <ActivityIndicator size="small" color="#fff" />
+            <ActivityIndicator size="small" color={colors.buttonPrimaryText} />
           ) : (
-            <Text style={styles.sendText}>Send</Text>
+            <Icon name="send" size={18} color={colors.buttonPrimaryText} />
           )}
         </TouchableOpacity>
       </View>
-    </KeyboardAvoidingView>
+
+      <Modal
+        visible={fullScreenImageUrl !== null}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setFullScreenImageUrl(null)}
+      >
+        <View style={styles.fullScreenImageContainer}>
+          <TouchableOpacity
+            style={[styles.fullScreenImageCloseButton, { top: insets.top + 16 }]}
+            onPress={() => setFullScreenImageUrl(null)}
+          >
+            <Icon name="x" size={28} color={colors.text} />
+          </TouchableOpacity>
+          {fullScreenImageUrl && (
+            <AuthenticatedImage
+              url={fullScreenImageUrl}
+              style={styles.fullScreenImage}
+              resizeMode="contain"
+            />
+          )}
+        </View>
+      </Modal>
+    </View>
   );
 }
 
-const markdownStyles = StyleSheet.create({
-  body: { color: '#f0f6fc', fontSize: 16 },
-  paragraph: { marginTop: 0, marginBottom: 8 },
-  strong: { color: '#f0f6fc', fontWeight: '700' },
-  em: { color: '#f0f6fc', fontStyle: 'italic' },
-  s: { color: '#8b949e' },
-  link: { color: '#58a6ff' },
-  blockquote: { backgroundColor: '#161b22', borderLeftColor: '#58a6ff', paddingLeft: 12, marginVertical: 8 },
-  code_inline: { backgroundColor: '#161b22', color: '#79c0ff', paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4, fontSize: 14 },
-  code_block: { backgroundColor: '#161b22', color: '#c9d1d9', padding: 12, borderRadius: 8, marginVertical: 8, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 14 },
-  fence: { backgroundColor: '#161b22', color: '#c9d1d9', padding: 12, borderRadius: 8, marginVertical: 8, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 14 },
-  bullet_list_icon: { color: '#f0f6fc' },
-  ordered_list_icon: { color: '#f0f6fc' },
-  list_item: { color: '#f0f6fc' },
-  heading1: { color: '#f0f6fc', fontSize: 24, fontWeight: '700', marginTop: 16, marginBottom: 8 },
-  heading2: { color: '#f0f6fc', fontSize: 20, fontWeight: '600', marginTop: 14, marginBottom: 6 },
-  heading3: { color: '#f0f6fc', fontSize: 18, fontWeight: '600', marginTop: 12, marginBottom: 4 },
-  hr: { backgroundColor: '#21262d', marginVertical: 12 },
-  table: { borderColor: '#21262d' },
-  th: { color: '#f0f6fc', borderColor: '#21262d', padding: 8 },
-  td: { color: '#f0f6fc', borderColor: '#21262d', padding: 8 },
-});
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0d1117',
-  },
-  center: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    paddingTop: 60,
-    borderBottomWidth: 1,
-    borderBottomColor: '#21262d',
-    gap: 12,
-  },
-  backText: {
-    color: '#58a6ff',
-    fontSize: 16,
-  },
-  modelButton: {
-    flex: 1,
-    backgroundColor: '#161b22',
-    padding: 12,
-    borderRadius: 8,
-  },
-  modelButtonText: {
-    color: '#f0f6fc',
-    fontSize: 14,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: '#0d1117',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: '70%',
-    paddingBottom: Platform.OS === 'ios' ? 40 : 20,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#21262d',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#f0f6fc',
-  },
-  modalCloseButton: {
-    padding: 4,
-    minWidth: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalCloseText: {
-    fontSize: 24,
-    color: '#8b949e',
-    lineHeight: 24,
-  },
-  modelSearchInput: {
-    backgroundColor: '#161b22',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    margin: 16,
-    fontSize: 16,
-    color: '#f0f6fc',
-    borderWidth: 1,
-    borderColor: '#21262d',
-  },
-  modelListWrapper: {
-    minHeight: 200,
-    maxHeight: 400,
-  },
-  modelList: {},
-  modelListItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#21262d',
-  },
-  modelListItemSelected: {
-    backgroundColor: '#161b22',
-  },
-  modelListItemText: {
-    flex: 1,
-    fontSize: 16,
-    color: '#f0f6fc',
-  },
-  modelListItemTextSelected: {
-    color: '#58a6ff',
-    fontWeight: '500',
-  },
-  modelListItemCheck: {
-    fontSize: 18,
-    color: '#238636',
-    marginLeft: 12,
-  },
-  emptyModelsContainer: {
-    padding: 32,
-    alignItems: 'center',
-    gap: 16,
-  },
-  emptyModelsText: {
-    color: '#8b949e',
-    fontSize: 14,
-    textAlign: 'center',
-  },
-  retryButton: {
-    backgroundColor: '#238636',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-    marginTop: 8,
-  },
-  retryButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  messagesList: {
-    padding: 16,
-    paddingBottom: 24,
-  },
-  messageBubble: {
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 12,
-    maxWidth: '85%',
-  },
-  userBubble: {
-    alignSelf: 'flex-end',
-    backgroundColor: '#238636',
-  },
-  assistantBubble: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#21262d',
-  },
-  messageRole: {
-    fontSize: 12,
-    color: '#8b949e',
-    marginBottom: 4,
-  },
-  messageContent: {
-    fontSize: 16,
-    color: '#f0f6fc',
-  },
-  attachments: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    padding: 8,
-    gap: 8,
-  },
-  attachmentChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#21262d',
-    padding: 8,
-    borderRadius: 8,
-    gap: 8,
-  },
-  attachmentName: {
-    color: '#f0f6fc',
-    maxWidth: 120,
-  },
-  removeAttachment: {
-    color: '#f85149',
-    fontSize: 18,
-  },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    padding: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#21262d',
-    gap: 8,
-  },
-  attachButton: {
-    padding: 12,
-    justifyContent: 'center',
-  },
-  input: {
-    flex: 1,
-    minHeight: 48 * 2,
-    backgroundColor: '#161b22',
-    borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    fontSize: 16,
-    lineHeight: 24,
-    color: '#f0f6fc',
-    maxHeight: 120,
-  },
-  sendButton: {
-    backgroundColor: '#238636',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 24,
-    justifyContent: 'center',
-  },
-  sendDisabled: {
-    opacity: 0.7,
-  },
-  sendText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-});

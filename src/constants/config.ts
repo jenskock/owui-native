@@ -7,6 +7,7 @@ export const STORAGE_KEYS = {
   BASE_URL: '@owui_base_url',
   USER: '@owui_user',
   DEFAULT_MODEL: '@owui_default_model',
+  THEME_MODE: '@owui_theme_mode',
 } as const;
 
 export const API_ENDPOINTS = {

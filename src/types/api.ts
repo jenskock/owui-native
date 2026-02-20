@@ -68,10 +68,20 @@ export type MessageContent =
   | string
   | Array<string | FileContent | TextContent | ImageContent>;
 
+export interface MessageFile {
+  type: 'file';
+  id: string;
+  url: string; // File ID or full URL
+  name: string;
+  content_type?: string;
+  [key: string]: unknown;
+}
+
 export interface Message {
   id?: string;
   role: 'user' | 'assistant' | 'system';
   content: MessageContent;
+  files?: MessageFile[];
   [key: string]: unknown;
 }
 

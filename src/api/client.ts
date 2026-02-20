@@ -12,6 +12,7 @@ import type {
   ChatListItem,
   ChatDetail,
   Message,
+  MessageFile,
   ModelInfo,
   ChatMessageRequest,
   StreamChunk,
@@ -50,6 +51,91 @@ class ApiClient {
 
   setToken(token: string | null): void {
     this.token = token;
+  }
+
+  /**
+   * Get the base URL (for constructing file URLs from file IDs)
+   */
+  async getBaseUrl(): Promise<string> {
+    await this.initialize();
+    return this.baseUrl;
+  }
+
+  /**
+   * Convert a file ID to a full file URL
+   */
+  async getFileUrl(fileId: string): Promise<string> {
+    const baseUrl = await this.getBaseUrl();
+    return `${baseUrl}/api/v1/files/${fileId}/content`;
+  }
+
+  /**
+   * Fetch an image with authentication and convert to data URL
+   */
+  async fetchImageAsDataUrl(imageUrl: string): Promise<string | null> {
+    await this.initialize();
+    try {
+      console.log('Fetching image from:', imageUrl.substring(0, 100));
+      const headers: Record<string, string> = {};
+      if (this.token) {
+        headers.Authorization = `Bearer ${this.token}`;
+      }
+      const response = await fetch(imageUrl, { headers });
+      if (!response.ok) {
+        console.error('Failed to fetch image:', response.status, response.statusText);
+        return null;
+      }
+      console.log('Image fetched successfully, content-type:', response.headers.get('content-type'));
+      
+      // Convert response to base64 using React Native compatible method
+      const arrayBuffer = await response.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+      console.log('Image size:', uint8Array.length, 'bytes');
+      
+      // Base64 encoding function that works in React Native
+      const base64Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+      let base64 = '';
+      let i = 0;
+      while (i < uint8Array.length) {
+        const byte1 = uint8Array[i++];
+        const byte2 = i < uint8Array.length ? uint8Array[i++] : undefined;
+        const byte3 = i < uint8Array.length ? uint8Array[i++] : undefined;
+        
+        // Encode first 6 bits (always present)
+        base64 += base64Chars.charAt((byte1 >> 2) & 63);
+        
+        // Encode next 6 bits (combines last 2 bits of byte1 and first 4 bits of byte2)
+        if (byte2 !== undefined) {
+          base64 += base64Chars.charAt(((byte1 << 4) | (byte2 >> 4)) & 63);
+        } else {
+          base64 += base64Chars.charAt((byte1 << 4) & 63);
+          base64 += '==';
+          break;
+        }
+        
+        // Encode next 6 bits (combines last 4 bits of byte2 and first 2 bits of byte3)
+        if (byte3 !== undefined) {
+          base64 += base64Chars.charAt(((byte2 << 2) | (byte3 >> 6)) & 63);
+          base64 += base64Chars.charAt(byte3 & 63);
+        } else {
+          base64 += base64Chars.charAt((byte2 << 2) & 63);
+          base64 += '=';
+          break;
+        }
+      }
+      
+      const contentType = response.headers.get('content-type') || 'image/png';
+      const dataUrl = `data:${contentType};base64,${base64}`;
+      console.log('Converted to data URL, length:', dataUrl.length);
+      return dataUrl;
+    } catch (error) {
+      console.error('Error fetching image:', error);
+      if (error instanceof Error) {
+        console.error('Error message:', error.message);
+        console.error('Error stack:', error.stack);
+      }
+      return null;
+    }
   }
 
   private async request<T>(
@@ -113,6 +199,7 @@ class ApiClient {
 
   /** GET /api/v1/chats/:id → single chat with messages */
   async getChat(chatId: string): Promise<Chat & { messages?: Message[] }> {
+    await this.initialize();
     const raw = await this.request<ChatDetail>(
       `${API_ENDPOINTS.CHATS}/${chatId}`
     );
@@ -120,10 +207,107 @@ class ApiClient {
     const ms = raw.chat?.messages;
     if (Array.isArray(ms)) {
       for (const m of ms) {
+        const files: MessageFile[] = [];
+        
+        // Debug: log the raw message structure
+        console.log('Processing message:', m.role, 'Content type:', typeof m.content, 'Has files property:', 'files' in m);
+        console.log('Raw message:', JSON.stringify(m, null, 2));
+        
+        // Extract files from the message if they exist
+        // Files can be in format: {type: "image", url: "/api/v1/files/{id}/content"}
+        const messageWithFiles = m as { 
+          files?: Array<{ 
+            type?: string;
+            id?: string; 
+            url?: string; 
+            name?: string; 
+            content_type?: string;
+          }>;
+        };
+        
+        // Check files array
+        if (Array.isArray(messageWithFiles.files)) {
+          console.log('Found files array with', messageWithFiles.files.length, 'files');
+          for (const file of messageWithFiles.files) {
+            // Process file if it has a url (can be relative or absolute)
+            if (file.url) {
+              // Construct full file URL
+              let fileUrl: string;
+              if (file.url.startsWith('http')) {
+                // Already absolute URL
+                fileUrl = file.url;
+              } else if (file.url.startsWith('/')) {
+                // Relative URL - prepend base URL
+                fileUrl = `${this.baseUrl}${file.url}`;
+              } else if (file.id) {
+                // Construct from file ID
+                fileUrl = `${this.baseUrl}/api/v1/files/${file.id}/content`;
+              } else {
+                // Try to extract ID from URL pattern /api/v1/files/{id}/content
+                const match = file.url.match(/\/api\/v1\/files\/([^/]+)\/content/);
+                if (match && match[1]) {
+                  fileUrl = `${this.baseUrl}/api/v1/files/${match[1]}/content`;
+                } else {
+                  continue; // Skip if we can't construct a valid URL
+                }
+              }
+              
+              // Extract file ID from URL if not provided
+              const fileId = file.id || fileUrl.match(/\/files\/([^/]+)\//)?.[1] || '';
+              
+              // Determine content type from file type or use default
+              const contentType = file.content_type || 
+                (file.type === 'image' ? 'image/png' : undefined);
+              
+              console.log('Adding file:', fileId, fileUrl, contentType);
+              files.push({
+                type: 'file',
+                id: fileId,
+                url: fileUrl,
+                name: file.name || `file-${fileId || 'unknown'}`,
+                content_type: contentType,
+              });
+            } else if (file.id) {
+              // File has ID but no URL - construct URL
+              const fileUrl = `${this.baseUrl}/api/v1/files/${file.id}/content`;
+              console.log('Adding file from ID:', file.id, fileUrl);
+              files.push({
+                type: 'file',
+                id: file.id,
+                url: fileUrl,
+                name: file.name || `file-${file.id}`,
+                content_type: file.content_type,
+              });
+            }
+          }
+        }
+        // Preserve content structure - could be string or array
+        // If content is a JSON string, try to parse it
+        let messageContent: Message['content'];
+        if (typeof m.content === 'string') {
+          // Try to parse as JSON first (might be a stringified array)
+          try {
+            const parsed = JSON.parse(m.content);
+            if (Array.isArray(parsed)) {
+              messageContent = parsed;
+            } else {
+              messageContent = m.content;
+            }
+          } catch {
+            // Not JSON, use as plain string
+            messageContent = m.content;
+          }
+        } else if (Array.isArray(m.content)) {
+          messageContent = m.content;
+        } else {
+          messageContent = '';
+        }
+        
         messages.push({
           id: m.id,
           role: (m.role as 'user' | 'assistant' | 'system') ?? 'user',
-          content: typeof m.content === 'string' ? m.content : '',
+          content: messageContent,
+          files: files.length > 0 ? files : undefined,
         });
       }
     }
@@ -175,6 +359,13 @@ class ApiClient {
         ? new Date(response.updated_at * 1000).toISOString()
         : undefined,
     };
+  }
+
+  /** DELETE /api/v1/chats/:id */
+  async deleteChat(chatId: string): Promise<void> {
+    await this.request<unknown>(`${API_ENDPOINTS.CHATS}/${chatId}`, {
+      method: 'DELETE',
+    });
   }
 
   async getModels(): Promise<ModelInfo[]> {
@@ -308,6 +499,8 @@ class ApiClient {
       return;
     }
     
+    // TextDecoder is available in React Native 0.84+
+    // @ts-expect-error TextDecoder is available at runtime in React Native
     const decoder = new TextDecoder();
     let buffer = '';
     try {

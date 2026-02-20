@@ -123,6 +123,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isLoading: false,
       baseUrl: null,
       username: null,
+      defaultModelId: null,
     });
   }, []);
 

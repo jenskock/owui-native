@@ -12,10 +12,12 @@ import {
   ActivityIndicator,
   StyleSheet,
 } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
+import { ThemeProvider, useTheme } from './src/contexts/ThemeContext';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { ChatsScreen } from './src/screens/ChatsScreen';
 import { ChatScreen } from './src/screens/ChatScreen';
@@ -26,11 +28,12 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 
 function AuthNavigator() {
   const { isAuthenticated, isLoading } = useAuth();
+  const { colors } = useTheme();
 
   if (isLoading) {
     return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color="#58a6ff" />
+      <View style={[styles.loading, { backgroundColor: colors.background }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -39,7 +42,7 @@ function AuthNavigator() {
     <Stack.Navigator
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: '#0d1117' },
+        contentStyle: { backgroundColor: colors.background },
       }}
     >
       {!isAuthenticated ? (
@@ -55,16 +58,32 @@ function AuthNavigator() {
   );
 }
 
+function AppContent() {
+  const { isDark, colors } = useTheme();
+  return (
+    <>
+      <StatusBar
+        barStyle={isDark ? 'light-content' : 'dark-content'}
+        backgroundColor={colors.background}
+      />
+      <NavigationContainer>
+        <AuthNavigator />
+      </NavigationContainer>
+    </>
+  );
+}
+
 function App() {
   return (
-    <SafeAreaProvider>
-      <AuthProvider>
-        <StatusBar barStyle="light-content" backgroundColor="#0d1117" />
-        <NavigationContainer>
-          <AuthNavigator />
-        </NavigationContainer>
-      </AuthProvider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <AppContent />
+          </AuthProvider>
+        </ThemeProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
@@ -73,7 +92,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#0d1117',
   },
 });
 
