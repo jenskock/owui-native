@@ -146,10 +146,7 @@ function AuthenticatedImage({
         console.error(fullError);
         setError(`Decode: ${String(errorMsg).substring(0, 50)}`);
       }}
-      onLoad={() => {
-        setError(null);
-        console.log('Image loaded successfully');
-      }}
+      onLoad={() => setError(null)}
     />
   );
 
@@ -536,16 +533,6 @@ export function ChatScreen() {
     [keyboardHeight, insets.bottom],
   );
 
-  // Log copy-paste curl for streaming test (scripts/README-streaming-test.md)
-  useEffect(() => {
-    if (!chatId || !selectedModel) return;
-    (async () => {
-      const baseUrl = await AsyncStorage.getItem(STORAGE_KEYS.BASE_URL);
-      const token = await AsyncStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
-      if (!baseUrl || !token) return;
-    })();
-  }, [chatId, selectedModel]);
-
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
@@ -929,35 +916,19 @@ export function ChatScreen() {
   const renderMessage = ({ item }: { item: Message }) => {
     const isUser = item.role === 'user';
     let contentArray: unknown[] | null = null;
-    
-    // Handle content - could be string, array, or JSON string
     if (Array.isArray(item.content)) {
       contentArray = item.content as unknown[];
-      console.log('Message content is array:', item.role, contentArray.length, 'parts');
     } else if (typeof item.content === 'string') {
-      // Try to parse if it's a JSON string
       try {
         const parsed = JSON.parse(item.content);
-        if (Array.isArray(parsed)) {
-          contentArray = parsed;
-          console.log('Message content parsed as array:', item.role, contentArray.length, 'parts');
-        }
-      } catch {
-        // Not JSON, treat as plain text
-      }
+        if (Array.isArray(parsed)) contentArray = parsed;
+      } catch {}
     }
-    
-    // Debug: log files if present
-    if (item.files && Array.isArray(item.files)) {
-      console.log('Message has files:', item.role, item.files.length, 'files');
-    }
-    
 
     const textParts: string[] = [];
     const imageUrls: string[] = [];
     const messageFiles: Array<{ url: string; name: string; content_type?: string }> = [];
 
-    // Collect all files from API (for messages loaded from server)
     if (item.files && Array.isArray(item.files)) {
       for (const file of item.files) {
         if (file.url) {
@@ -973,24 +944,15 @@ export function ChatScreen() {
       }
     }
 
-    // Handle content array (newly sent messages with base64 data URLs or file refs)
     if (contentArray) {
-      console.log('Processing content array with', contentArray.length, 'parts');
       for (const part of contentArray) {
         if (typeof part === 'string') {
           textParts.push(part);
         } else if (part && typeof part === 'object' && part !== null) {
           const partObj = part as Record<string, unknown>;
-          console.log('Content part type:', partObj.type, 'Keys:', Object.keys(partObj));
-
           if (partObj.type === 'image_url' && 'image_url' in partObj) {
             const imageUrl = partObj.image_url as { url?: string };
-            if (imageUrl?.url) {
-              const finalUrl = imageUrl.url;
-              console.log('Found image_url in content array:', finalUrl);
-              // Always show image_url parts as image previews (part type already means image)
-              imageUrls.push(finalUrl);
-            }
+            if (imageUrl?.url) imageUrls.push(imageUrl.url);
           } else if (partObj.type === 'text' && 'text' in partObj && typeof partObj.text === 'string') {
             textParts.push(partObj.text);
           } else if (partObj.type === 'file' && ('id' in partObj || 'url' in partObj)) {

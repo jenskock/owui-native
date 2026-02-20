@@ -161,24 +161,14 @@ class ApiClient {
   async fetchImageAsDataUrl(imageUrl: string): Promise<string | null> {
     await this.initialize();
     try {
-      console.log('Fetching image from:', imageUrl.substring(0, 100));
       const headers: Record<string, string> = {};
       if (this.token) {
         headers.Authorization = `Bearer ${this.token}`;
       }
       const response = await fetch(imageUrl, { headers });
-      if (!response.ok) {
-        console.error('Failed to fetch image:', response.status, response.statusText);
-        return null;
-      }
-      console.log('Image fetched successfully, content-type:', response.headers.get('content-type'));
-      
-      // Convert response to base64 using React Native compatible method
+      if (!response.ok) return null;
       const arrayBuffer = await response.arrayBuffer();
       const uint8Array = new Uint8Array(arrayBuffer);
-      console.log('Image size:', uint8Array.length, 'bytes');
-      
-      // Base64 encoding function that works in React Native
       const base64Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
       let base64 = '';
       let i = 0;
@@ -188,10 +178,8 @@ class ApiClient {
         const byte2 = i < uint8Array.length ? uint8Array[i++] : undefined;
         const byte3 = i < uint8Array.length ? uint8Array[i++] : undefined;
 
-        // Encode first 6 bits (always present)
         base64 += base64Chars.charAt((byte1 >> 2) & 63);
 
-        // Encode next 6 bits (combines last 2 bits of byte1 and first 4 bits of byte2)
         if (byte2 !== undefined) {
           base64 += base64Chars.charAt(((byte1 << 4) | (byte2 >> 4)) & 63);
         } else {
@@ -200,7 +188,6 @@ class ApiClient {
           break;
         }
 
-        // Encode next 6 bits (combines last 4 bits of byte2 and first 2 bits of byte3)
         if (byte3 !== undefined) {
           base64 += base64Chars.charAt(((byte2 << 2) | (byte3 >> 6)) & 63);
           base64 += base64Chars.charAt(byte3 & 63);
@@ -211,17 +198,11 @@ class ApiClient {
         }
       }
       /* eslint-enable no-bitwise */
-      
+
       const contentType = response.headers.get('content-type') || 'image/png';
-      const dataUrl = `data:${contentType};base64,${base64}`;
-      console.log('Converted to data URL, length:', dataUrl.length);
-      return dataUrl;
+      return `data:${contentType};base64,${base64}`;
     } catch (error) {
       console.error('Error fetching image:', error);
-      if (error instanceof Error) {
-        console.error('Error message:', error.message);
-        console.error('Error stack:', error.stack);
-      }
       return null;
     }
   }
@@ -329,8 +310,6 @@ class ApiClient {
     if (Array.isArray(ms)) {
       for (const m of ms) {
         const files: MessageFile[] = [];
-
-        // Extract files from the message (user attachments and assistant sources)
         type FileEntry = {
           id?: string;
           url?: string;
@@ -363,7 +342,6 @@ class ApiClient {
             entry.file?.meta?.content_type ??
             (entry.type === 'image' ? 'image/png' : 'application/octet-stream');
           const name = entry.name ?? entry.file?.meta?.name ?? `file-${id || 'unknown'}`;
-          console.log('Adding file:', id, fileUrl, contentType);
           files.push({
             type: 'file',
             id,
@@ -374,28 +352,19 @@ class ApiClient {
         };
 
         if (Array.isArray(messageWithFiles.files)) {
-          console.log('Found files array with', messageWithFiles.files.length, 'files');
           for (const file of messageWithFiles.files) {
             if (file.url) pushFile(file);
             else if (file.id) pushFile({ ...file, id: file.id, name: file.name ?? file.file?.meta?.name, content_type: file.content_type ?? file.file?.meta?.content_type });
             else if (file.file?.id) pushFile({ id: file.file.id, name: file.file.meta?.name, content_type: file.content_type ?? file.file.meta?.content_type });
           }
         }
-        // Intentionally skip sources: they reference the same files the user already attached; no need to show them again on the assistant message.
-        // Preserve content structure - could be string or array
-        // If content is a JSON string, try to parse it
+        // Intentionally skip sources: they reference the same files the user already attached.
         let messageContent: Message['content'];
         if (typeof m.content === 'string') {
-          // Try to parse as JSON first (might be a stringified array)
           try {
             const parsed = JSON.parse(m.content);
-            if (Array.isArray(parsed)) {
-              messageContent = parsed;
-            } else {
-              messageContent = m.content;
-            }
+            messageContent = Array.isArray(parsed) ? parsed : m.content;
           } catch {
-            // Not JSON, use as plain string
             messageContent = m.content;
           }
         } else if (Array.isArray(m.content)) {
@@ -404,7 +373,6 @@ class ApiClient {
           messageContent = '';
         }
 
-        // When server omits files array, derive file refs from content so image previews still work
         if (files.length === 0 && Array.isArray(messageContent)) {
           for (const part of messageContent) {
             if (part && typeof part === 'object' && (part as { type?: string }).type === 'image_url') {
