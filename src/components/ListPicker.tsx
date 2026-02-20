@@ -24,12 +24,10 @@ export interface ListPickerItem {
   [key: string]: any; // Allow additional properties
 }
 
-interface ListPickerProps<T extends ListPickerItem> {
+interface ListPickerPropsBase<T extends ListPickerItem> {
   visible: boolean;
   title: string;
   items: T[];
-  selectedId: string | null | undefined;
-  onSelect: (id: string | null) => void;
   onClose: () => void;
   searchPlaceholder?: string;
   emptyMessage?: string;
@@ -40,6 +38,22 @@ interface ListPickerProps<T extends ListPickerItem> {
   allowClear?: boolean;
   clearLabel?: string;
 }
+
+interface ListPickerPropsSingle<T extends ListPickerItem> extends ListPickerPropsBase<T> {
+  multiSelect?: false;
+  selectedId: string | null | undefined;
+  onSelect: (id: string | null) => void;
+}
+
+interface ListPickerPropsMulti<T extends ListPickerItem> extends ListPickerPropsBase<T> {
+  multiSelect: true;
+  selectedIds: string[];
+  onSelect: (ids: string[]) => void;
+}
+
+export type ListPickerProps<T extends ListPickerItem> =
+  | ListPickerPropsSingle<T>
+  | ListPickerPropsMulti<T>;
 
 function createStyles(colors: ColorPalette) {
   return StyleSheet.create({
@@ -173,35 +187,46 @@ function createStyles(colors: ColorPalette) {
   });
 }
 
-export function ListPicker<T extends ListPickerItem>({
-  visible,
-  title,
-  items,
-  selectedId,
-  onSelect,
-  onClose,
-  searchPlaceholder = 'Search...',
-  emptyMessage = 'No items available',
-  loading = false,
-  loadingMessage = 'Loading...',
-  renderItem,
-  searchFilter,
-  allowClear = false,
-  clearLabel = 'Clear selection',
-}: ListPickerProps<T>) {
+export function ListPicker<T extends ListPickerItem>(props: ListPickerProps<T>) {
+  const {
+    visible,
+    title,
+    items,
+    onClose,
+    searchPlaceholder = 'Search...',
+    emptyMessage = 'No items available',
+    loading = false,
+    loadingMessage = 'Loading...',
+    renderItem,
+    searchFilter,
+    allowClear = false,
+    clearLabel = 'Clear selection',
+  } = props;
+
+  const isMulti = props.multiSelect === true;
+  const selectedId = !isMulti ? props.selectedId : undefined;
+  const selectedIds = isMulti ? props.selectedIds : undefined;
+  const onSelectSingle = !isMulti ? props.onSelect : undefined;
+  const onSelectMulti = isMulti ? props.onSelect : undefined;
+
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   const [searchQuery, setSearchQuery] = useState('');
-  const [pendingSelection, setPendingSelection] = useState<string | null | undefined>(selectedId);
+  const [pendingSelection, setPendingSelection] = useState<string | null | undefined>(undefined);
+  const [pendingSelectionIds, setPendingSelectionIds] = useState<string[]>([]);
 
-  // Reset pending selection when modal opens/closes or selectedId changes externally
+  // Reset pending selection when modal opens/closes or selection changes externally
   useEffect(() => {
     if (visible) {
-      setPendingSelection(selectedId);
       setSearchQuery('');
+      if (isMulti && selectedIds) {
+        setPendingSelectionIds([...selectedIds]);
+      } else if (!isMulti) {
+        setPendingSelection(selectedId);
+      }
     }
-  }, [visible, selectedId]);
+  }, [visible, isMulti, selectedId, selectedIds]);
 
   const defaultSearchFilter = (item: T, query: string): boolean => {
     const lowerQuery = query.toLowerCase();
@@ -216,26 +241,49 @@ export function ListPicker<T extends ListPickerItem>({
   }, [items, searchQuery, filterFn]);
 
   const handleSave = () => {
-    onSelect(pendingSelection ?? null);
+    if (isMulti) {
+      (onSelectMulti as (ids: string[]) => void)(pendingSelectionIds);
+    } else {
+      onSelectSingle!(pendingSelection ?? null);
+    }
     onClose();
   };
 
   const handleAbort = () => {
-    setPendingSelection(selectedId);
+    if (isMulti && selectedIds) {
+      setPendingSelectionIds([...selectedIds]);
+    } else {
+      setPendingSelection(selectedId);
+    }
     setSearchQuery('');
     onClose();
   };
 
   const handleClear = () => {
-    setPendingSelection(null);
+    if (isMulti) {
+      setPendingSelectionIds([]);
+    } else {
+      setPendingSelection(null);
+    }
+  };
+
+  const toggleMulti = (id: string) => {
+    setPendingSelectionIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
   };
 
   const defaultRenderItem = (item: T) => {
-    const isSelected = pendingSelection === item.id;
+    const isSelected = isMulti
+      ? pendingSelectionIds.includes(item.id)
+      : pendingSelection === item.id;
+    const onPress = isMulti
+      ? () => toggleMulti(item.id)
+      : () => setPendingSelection(item.id);
     return (
       <TouchableOpacity
         style={[styles.itemRow, isSelected && styles.itemRowSelected]}
-        onPress={() => setPendingSelection(item.id)}
+        onPress={onPress}
       >
         <Text
           style={[styles.itemRowText, isSelected && styles.itemRowTextSelected]}
@@ -288,10 +336,14 @@ export function ListPicker<T extends ListPickerItem>({
                   data={filteredItems}
                   keyExtractor={(item) => item.id}
                   renderItem={({ item }) => {
+                    const isSelected = isMulti
+                      ? pendingSelectionIds.includes(item.id)
+                      : pendingSelection === item.id;
+                    const onPress = isMulti
+                      ? () => toggleMulti(item.id)
+                      : () => setPendingSelection(item.id);
                     const rendered = renderItem
-                      ? renderItem(item, pendingSelection === item.id, () =>
-                          setPendingSelection(item.id)
-                        )
+                      ? renderItem(item, isSelected, onPress)
                       : defaultRenderItem(item);
                     return rendered ?? null;
                   }}

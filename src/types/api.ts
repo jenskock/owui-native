@@ -77,18 +77,41 @@ export interface MessageFile {
   [key: string]: unknown;
 }
 
+/** Tool/source citation on an assistant message (e.g. MCP tool_search_post) */
+export interface MessageSource {
+  source?: { name?: string };
+  document?: string[];
+  metadata?: Array<{ source?: string; parameters?: Record<string, unknown> }>;
+  tool_result?: boolean;
+}
+
 export interface Message {
   id?: string;
   role: 'user' | 'assistant' | 'system';
   content: MessageContent;
   files?: MessageFile[];
+  sources?: MessageSource[];
   [key: string]: unknown;
 }
 
 export interface ModelInfo {
   id: string;
   name: string;
+  /** Backend model config: default tools for this model (from workspace model editor) */
+  info?: { meta?: { toolIds?: string[] }; [key: string]: unknown };
   [key: string]: unknown;
+}
+
+/** Tool from GET /api/v1/tools/ (enable/disable per chat via tool_ids in completions) */
+export interface Tool {
+  id: string;
+  user_id?: string;
+  name: string;
+  meta?: { description?: string; manifest?: Record<string, unknown> };
+  access_grants?: unknown[];
+  updated_at?: number;
+  created_at?: number;
+  user?: unknown;
 }
 
 export interface ChatMessageRequest {
@@ -96,6 +119,8 @@ export interface ChatMessageRequest {
   messages: Message[];
   stream?: boolean;
   regenerate?: boolean;
+  /** Tool IDs to enable for this request (from GET /api/v1/tools/) */
+  tool_ids?: string[];
 }
 
 export interface StreamChunk {

@@ -40,39 +40,66 @@ type NavigationProp = NativeStackNavigationProp<
 
 type ChatRowProps = {
   item: Chat;
+  isPinned: boolean;
   formatDate: (dateStr: string) => string;
   onPress: (chatId: string) => void;
   onDelete: (chat: Chat) => void;
+  onTogglePin: (chat: Chat) => void;
   deleteActionContainerStyle: object;
   deleteActionStyle: object;
   deleteActionContentStyle: object;
   deleteActionTextStyle: object;
+  pinActionContainerStyle: object;
+  pinActionStyle: object;
+  pinActionContentStyle: object;
+  pinActionTextStyle: object;
   chatItemStyle: object;
+  chatRowStyle: object;
+  chatRowContentStyle: object;
+  pinIconStyle: object;
   chatTitleStyle: object;
   chatDateStyle: object;
   destructiveTextColor: string;
+  pinTextColor: string;
+  pinIconColor: string;
 };
 
 const ChatRow = React.memo(function ChatRow({
   item,
+  isPinned,
   formatDate,
   onPress,
   onDelete,
+  onTogglePin,
   deleteActionContainerStyle,
   deleteActionStyle,
   deleteActionContentStyle,
   deleteActionTextStyle,
+  pinActionContainerStyle,
+  pinActionStyle,
+  pinActionContentStyle,
+  pinActionTextStyle,
   chatItemStyle,
+  chatRowStyle,
+  chatRowContentStyle,
+  pinIconStyle,
   chatTitleStyle,
   chatDateStyle,
   destructiveTextColor,
+  pinTextColor,
+  pinIconColor,
 }: ChatRowProps) {
+  const swipeableRef = useRef<Swipeable>(null);
+
   const renderRightActions = useCallback(
     () => (
       <View style={deleteActionContainerStyle}>
         <GHTouchableOpacity
           style={deleteActionStyle}
-          onPress={() => onDelete(item)}
+          onPress={() => {
+            swipeableRef.current?.close();
+            onDelete(item);
+          }}
           activeOpacity={0.8}
         >
           <View style={deleteActionContentStyle}>
@@ -93,22 +120,72 @@ const ChatRow = React.memo(function ChatRow({
     ]
   );
 
+  const renderLeftActions = useCallback(
+    () => (
+      <View style={pinActionContainerStyle}>
+        <GHTouchableOpacity
+          style={pinActionStyle}
+          onPress={() => {
+            swipeableRef.current?.close();
+            onTogglePin(item);
+          }}
+          activeOpacity={0.8}
+        >
+          <View style={pinActionContentStyle}>
+            <Icon
+              name={isPinned ? 'x' : 'bookmark'}
+              size={22}
+              color={pinTextColor}
+            />
+            <Text style={pinActionTextStyle}>
+              {isPinned ? 'Unpin' : 'Pin'}
+            </Text>
+          </View>
+        </GHTouchableOpacity>
+      </View>
+    ),
+    [
+      item,
+      isPinned,
+      onTogglePin,
+      pinActionContainerStyle,
+      pinActionStyle,
+      pinActionContentStyle,
+      pinActionTextStyle,
+      pinTextColor,
+    ]
+  );
+
   return (
     <Swipeable
+      ref={swipeableRef}
       renderRightActions={renderRightActions}
+      renderLeftActions={renderLeftActions}
       friction={2}
       rightThreshold={40}
+      leftThreshold={40}
       overshootRight={false}
+      overshootLeft={false}
     >
       <GHTouchableOpacity
-        style={chatItemStyle}
+        style={[chatItemStyle, chatRowStyle]}
         onPress={() => onPress(item.id)}
         activeOpacity={0.7}
       >
-        <Text style={chatTitleStyle} numberOfLines={1}>
-          {item.title || 'New Chat'}
-        </Text>
-        <Text style={chatDateStyle}>{formatDate(item.create_time)}</Text>
+        <View style={chatRowContentStyle}>
+          <Text style={chatTitleStyle} numberOfLines={1}>
+            {item.title || 'New Chat'}
+          </Text>
+          <Text style={chatDateStyle}>{formatDate(item.create_time)}</Text>
+        </View>
+        {isPinned ? (
+          <Icon
+            name="bookmark"
+            size={14}
+            color={pinIconColor}
+            style={pinIconStyle}
+          />
+        ) : null}
       </GHTouchableOpacity>
     </Swipeable>
   );
@@ -192,6 +269,16 @@ function createStyles(colors: ColorPalette) {
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: colors.surfaceVariant,
     },
+    chatRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    chatRowContent: {
+      flex: 1,
+    },
+    pinIconMargin: {
+      marginLeft: 8,
+    },
     chatTitle: {
       fontSize: 16,
       fontWeight: '600',
@@ -214,10 +301,9 @@ function createStyles(colors: ColorPalette) {
       marginTop: 48,
     },
     deleteActionContainer: {
-      flex: 1,
+      width: 80,
       flexDirection: 'row',
       justifyContent: 'flex-end',
-      minWidth: 80,
       height: '100%',
     },
     deleteAction: {
@@ -229,10 +315,35 @@ function createStyles(colors: ColorPalette) {
     },
     deleteActionContent: {
       alignItems: 'center',
-      marginTop: 20,
+      marginTop: 10,
+      marginBottom: 10,
     },
     deleteActionText: {
       color: colors.destructiveText,
+      fontSize: 12,
+      fontWeight: '600',
+      marginTop: 4,
+    },
+    pinActionContainer: {
+      width: 72,
+      flexDirection: 'row',
+      justifyContent: 'flex-start',
+      height: '100%',
+    },
+    pinAction: {
+      backgroundColor: colors.primary,
+      justifyContent: 'center',
+      alignItems: 'center',
+      width: 72,
+      alignSelf: 'stretch',
+    },
+    pinActionContent: {
+      alignItems: 'center',
+      marginTop: 10,
+      marginBottom: 10,
+    },
+    pinActionText: {
+      color: colors.buttonPrimaryText,
       fontSize: 12,
       fontWeight: '600',
       marginTop: 4,
@@ -248,12 +359,26 @@ export function ChatsScreen() {
 
   const openSettings = () => navigation.navigate('Settings');
   const [chats, setChats] = useState<Chat[]>([]);
+  const [pinnedChats, setPinnedChats] = useState<Chat[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const listRef = useRef<FlatList>(null);
   const isFetchingRef = useRef(false);
+  const pinnedIds = React.useMemo(
+    () => new Set(pinnedChats.map((c) => c.id)),
+    [pinnedChats]
+  );
+
+  const fetchPinned = useCallback(async () => {
+    try {
+      const data = await apiClient.getPinnedChats();
+      setPinnedChats(data);
+    } catch (error) {
+      console.error('Failed to fetch pinned chats:', error);
+    }
+  }, []);
 
   const fetchChats = useCallback(async (silent = false) => {
     if (isFetchingRef.current && silent) {
@@ -262,8 +387,12 @@ export function ChatsScreen() {
     }
     isFetchingRef.current = true;
     try {
-      const data = await apiClient.getChats();
+      const [data, pinned] = await Promise.all([
+        apiClient.getChats(),
+        apiClient.getPinnedChats(),
+      ]);
       setChats(data);
+      setPinnedChats(pinned);
     } catch (error) {
       console.error('Failed to fetch chats:', error);
     } finally {
@@ -339,6 +468,7 @@ export function ChatsScreen() {
               try {
                 await apiClient.deleteChat(chat.id);
                 setChats((prev) => prev.filter((c) => c.id !== chat.id));
+                setPinnedChats((prev) => prev.filter((c) => c.id !== chat.id));
               } catch (error) {
                 console.error('Failed to delete chat:', error);
                 Alert.alert('Error', 'Failed to delete chat. Please try again.');
@@ -350,6 +480,16 @@ export function ChatsScreen() {
     },
     []
   );
+
+  const handleTogglePin = useCallback(async (chat: Chat) => {
+    try {
+      await apiClient.toggleChatPinned(chat.id);
+      await fetchPinned();
+    } catch (error) {
+      console.error('Failed to toggle pin:', error);
+      Alert.alert('Error', 'Failed to update pin. Please try again.');
+    }
+  }, [fetchPinned]);
 
   const formatDate = useCallback((dateStr: string) => {
     try {
@@ -381,6 +521,20 @@ export function ChatsScreen() {
     return title.includes(query);
   });
 
+  // Pinned first (in pinned order), then the rest by date; respect search
+  const displayChats = React.useMemo(() => {
+    const pinnedIdsSet = new Set(pinnedChats.map((c) => c.id));
+    const matchesSearch = (chat: Chat) => {
+      if (!searchQuery.trim()) return true;
+      const query = searchQuery.toLowerCase();
+      const title = (chat.title || 'New Chat').toLowerCase();
+      return title.includes(query);
+    };
+    const pinned = pinnedChats.filter(matchesSearch);
+    const nonPinned = filteredChats.filter((c) => !pinnedIdsSet.has(c.id));
+    return [...pinned, ...nonPinned];
+  }, [filteredChats, pinnedChats, searchQuery]);
+
   const handlePressChat = useCallback(
     (chatId: string) => navigation.navigate('Chat', { chatId }),
     [navigation]
@@ -390,20 +544,41 @@ export function ChatsScreen() {
     ({ item }: { item: Chat }) => (
       <ChatRow
         item={item}
+        isPinned={pinnedIds.has(item.id)}
         formatDate={formatDate}
         onPress={handlePressChat}
         onDelete={handleDeleteChat}
+        onTogglePin={handleTogglePin}
         deleteActionContainerStyle={styles.deleteActionContainer}
         deleteActionStyle={styles.deleteAction}
         deleteActionContentStyle={styles.deleteActionContent}
         deleteActionTextStyle={styles.deleteActionText}
+        pinActionContainerStyle={styles.pinActionContainer}
+        pinActionStyle={styles.pinAction}
+        pinActionContentStyle={styles.pinActionContent}
+        pinActionTextStyle={styles.pinActionText}
         chatItemStyle={styles.chatItem}
+        chatRowStyle={styles.chatRow}
+        chatRowContentStyle={styles.chatRowContent}
+        pinIconStyle={styles.pinIconMargin}
         chatTitleStyle={styles.chatTitle}
         chatDateStyle={styles.chatDate}
         destructiveTextColor={colors.destructiveText}
+        pinTextColor={colors.buttonPrimaryText}
+        pinIconColor={colors.primary}
       />
     ),
-    [formatDate, handlePressChat, handleDeleteChat, styles, colors.destructiveText]
+    [
+      pinnedIds,
+      formatDate,
+      handlePressChat,
+      handleDeleteChat,
+      handleTogglePin,
+      styles,
+      colors.destructiveText,
+      colors.buttonPrimaryText,
+      colors.primary,
+    ]
   );
 
   return (
@@ -437,7 +612,7 @@ export function ChatsScreen() {
       ) : (
         <FlatList
           ref={listRef}
-          data={filteredChats}
+          data={displayChats}
           renderItem={renderChatItem}
           keyExtractor={(item) => item.id}
           contentContainerStyle={[

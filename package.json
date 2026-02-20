@@ -26,7 +26,8 @@
     "react-native-markdown-display": "^7.0.2",
     "react-native-safe-area-context": "^5.5.2",
     "react-native-screens": "^4.23.0",
-    "react-native-vector-icons": "^10.3.0"
+    "react-native-vector-icons": "^10.3.0",
+    "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
@@ -58,7 +59,6 @@
     "minimatch": "^10.2.1",
     "glob": "^10.4.5",
     "fast-xml-parser": "5.3.6",
-    "ajv": "^8.18.0",
     "eslint-visitor-keys": "5.0.0"
   }
 }

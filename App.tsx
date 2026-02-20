@@ -75,7 +75,7 @@ function AppContent() {
 
 function App() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={styles.flex1}>
       <SafeAreaProvider>
         <ThemeProvider>
           <AuthProvider>
@@ -88,6 +88,9 @@ function App() {
 }
 
 const styles = StyleSheet.create({
+  flex1: {
+    flex: 1,
+  },
   loading: {
     flex: 1,
     justifyContent: 'center',

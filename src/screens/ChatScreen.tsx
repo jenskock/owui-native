@@ -36,16 +36,40 @@ import {
 } from '@react-native-documents/picker';
 import { launchCamera, launchImageLibrary, type PhotoQuality } from 'react-native-image-picker';
 import RNFS from 'react-native-fs';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { apiClient } from '../api/client';
-import type { Message, ModelInfo } from '../types/api';
+import { getTools } from '../api/tools';
+import { STORAGE_KEYS } from '../constants/config';
+import type { Message, ModelInfo, Tool } from '../types/api';
 import type { RootStackParamList } from '../navigation/types';
 import type { ColorPalette } from '../constants/colors';
 import { ListPicker } from '../components/ListPicker';
 
 type ChatRouteProp = RouteProp<RootStackParamList, 'Chat'>;
 type ChatNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Chat'>;
+
+const authImageStyles = StyleSheet.create({
+  loadingContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.1)',
+  },
+  wrapper: { position: 'relative' },
+  errorOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 8,
+  },
+  errorText: { color: 'white', fontSize: 10, textAlign: 'center' },
+});
 
 // Component to render authenticated images
 function AuthenticatedImage({ 
@@ -105,7 +129,7 @@ function AuthenticatedImage({
 
   if (isLoading) {
     return (
-      <View style={[style, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.1)' }]}>
+      <View style={[style, authImageStyles.loadingContainer]}>
         <ActivityIndicator size="small" />
       </View>
     );
@@ -130,7 +154,7 @@ function AuthenticatedImage({
   );
 
   return (
-    <View style={{ position: 'relative' }}>
+    <View style={authImageStyles.wrapper}>
       {onPress ? (
         <TouchableOpacity onPress={onPress} activeOpacity={0.9}>
           {imageComponent}
@@ -139,18 +163,8 @@ function AuthenticatedImage({
         imageComponent
       )}
       {error && (
-        <View style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.7)',
-          justifyContent: 'center',
-          alignItems: 'center',
-          padding: 8,
-        }}>
-          <Text style={{ color: 'white', fontSize: 10, textAlign: 'center' }}>{error}</Text>
+        <View style={authImageStyles.errorOverlay}>
+          <Text style={authImageStyles.errorText}>{error}</Text>
         </View>
       )}
     </View>
@@ -161,19 +175,6 @@ function isImageFile(file: { content_type?: string; name?: string }): boolean {
   if (file.content_type?.startsWith('image/')) return true;
   if (file.name && /\.(jpg|jpeg|png|gif|webp|bmp|heic)$/i.test(file.name)) return true;
   return false;
-}
-
-/** For data URLs, only treat as image if MIME is image/*. Non-data URLs are left to isImageFile (e.g. from item.files). */
-function isImageUrl(url: string): boolean {
-  if (!url.startsWith('data:')) return true;
-  const semicolon = url.indexOf(';');
-  const mime = semicolon > 5 ? url.slice(5, semicolon) : '';
-  return mime.startsWith('image/');
-}
-
-function getDataUrlMime(url: string): string | undefined {
-  if (!url.startsWith('data:') || !url.includes(';')) return undefined;
-  return url.slice(5, url.indexOf(';'));
 }
 
 // Renders a non-image file as a tappable row (name + icon)
@@ -331,6 +332,7 @@ function createStyles(colors: ColorPalette) {
       flexWrap: 'wrap',
       gap: 8,
     },
+    messageImageWrapper: { position: 'relative' },
     messageFileLink: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -349,6 +351,32 @@ function createStyles(colors: ColorPalette) {
       marginTop: 4,
       marginBottom: 4,
       gap: 4,
+    },
+    toolUsageContainer: {
+      marginTop: 10,
+      paddingTop: 8,
+      borderTopWidth: 1,
+      gap: 6,
+    },
+    toolUsageLabel: {
+      fontSize: 11,
+      fontWeight: '600',
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+    toolUsageChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 4,
+      paddingHorizontal: 8,
+      borderRadius: 6,
+      gap: 6,
+      alignSelf: 'flex-start',
+      maxWidth: '100%',
+    },
+    toolUsageChipText: {
+      fontSize: 12,
+      flex: 1,
     },
     attachments: {
       flexDirection: 'row',
@@ -482,6 +510,10 @@ export function ChatScreen() {
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [isCreatingNewChat, setIsCreatingNewChat] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<PickedFile[]>([]);
+  const [selectedToolIds, setSelectedToolIds] = useState<string[]>([]);
+  const [showToolsModal, setShowToolsModal] = useState(false);
+  const [toolsList, setToolsList] = useState<Tool[] | null>(null);
+  const [toolsLoading, setToolsLoading] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [inputRowHeight, setInputRowHeight] = useState(88);
   const [fullScreenImageUrl, setFullScreenImageUrl] = useState<string | null>(null);
@@ -490,6 +522,29 @@ export function ChatScreen() {
   const listHeightRef = useRef(0);
   const contentHeightRef = useRef(0);
   const scrollFollowUpTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const lastDefaultToolsModelRef = useRef<string | null>(null);
+
+  const attachmentsPositionStyle = useMemo(
+    () => ({ bottom: (keyboardHeight > 0 ? keyboardHeight : 0) + inputRowHeight }),
+    [keyboardHeight, inputRowHeight],
+  );
+  const inputRowPositionStyle = useMemo(
+    () => ({
+      paddingBottom: 8 + (keyboardHeight > 0 ? 0 : insets.bottom),
+      bottom: keyboardHeight > 0 ? keyboardHeight : 0,
+    }),
+    [keyboardHeight, insets.bottom],
+  );
+
+  // Log copy-paste curl for streaming test (scripts/README-streaming-test.md)
+  useEffect(() => {
+    if (!chatId || !selectedModel) return;
+    (async () => {
+      const baseUrl = await AsyncStorage.getItem(STORAGE_KEYS.BASE_URL);
+      const token = await AsyncStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+      if (!baseUrl || !token) return;
+    })();
+  }, [chatId, selectedModel]);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -574,6 +629,16 @@ export function ChatScreen() {
   useEffect(() => {
     loadModels();
   }, [loadModels]);
+
+  // Apply default tools from selected model when it changes (backend: model.info.meta.toolIds)
+  useEffect(() => {
+    if (!selectedModel || !models.length) return;
+    if (lastDefaultToolsModelRef.current === selectedModel) return;
+    lastDefaultToolsModelRef.current = selectedModel;
+    const model = models.find((m) => m.id === selectedModel);
+    const defaultIds = model?.info?.meta?.toolIds;
+    setSelectedToolIds(Array.isArray(defaultIds) ? [...defaultIds] : []);
+  }, [selectedModel, models]);
 
   const readUriAsBase64 = async (uri: string): Promise<string | undefined> => {
     try {
@@ -665,17 +730,41 @@ export function ChatScreen() {
     }
   };
 
+  const openToolsModal = () => {
+    setShowToolsModal(true);
+  };
+
+  const loadToolsForModal = useCallback(async () => {
+    setToolsLoading(true);
+    try {
+      const token = await AsyncStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+      const list = token ? await getTools(token) : [];
+      setToolsList(list);
+    } catch {
+      setToolsList([]);
+    } finally {
+      setToolsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (showToolsModal && toolsList === null && !toolsLoading) {
+      loadToolsForModal();
+    }
+  }, [showToolsModal, toolsList, toolsLoading, loadToolsForModal]);
+
   const showAttachOptions = () => {
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
         {
-          options: ['Cancel', 'Take Photo', 'Photo Library', 'Browse'],
+          options: ['Cancel', 'Take Photo', 'Photo Library', 'Browse', 'Tools'],
           cancelButtonIndex: 0,
         },
         (buttonIndex) => {
           if (buttonIndex === 1) pickCamera();
           else if (buttonIndex === 2) pickPhotoLibrary();
           else if (buttonIndex === 3) pickFile();
+          else if (buttonIndex === 4) openToolsModal();
         }
       );
     } else {
@@ -687,6 +776,7 @@ export function ChatScreen() {
           { text: 'Take Photo', onPress: pickCamera },
           { text: 'Photo Library', onPress: pickPhotoLibrary },
           { text: 'Browse', onPress: pickFile },
+          { text: 'Tools', onPress: openToolsModal },
         ]
       );
     }
@@ -751,6 +841,7 @@ export function ChatScreen() {
         model: selectedModel,
         messages: allMessages,
         stream: true,
+        ...(selectedToolIds.length > 0 ? { tool_ids: selectedToolIds } : {}),
       });
 
       let fullContent = '';
@@ -766,7 +857,14 @@ export function ChatScreen() {
       ]);
       setStreamingContent('');
 
-      // Reload chat to get server state (e.g. file refs); restore our content if server returned empty
+      // Persist assistant message so it appears when user reopens the chat
+      try {
+        await apiClient.updateChatAssistantContent(chatId, assistantContent);
+      } catch (err) {
+        console.warn('updateChatAssistantContent failed:', err);
+      }
+
+      // Reload chat to get server state; notify backend for title generation etc.
       try {
         const serverMessages = await loadChat();
         if (
@@ -787,9 +885,29 @@ export function ChatScreen() {
               return next;
             });
           }
+          const lastId = (last as { id?: string }).id;
+          apiClient
+            .notifyChatCompleted(chatId, {
+              model: selectedModel,
+              messageId: lastId,
+            })
+            .catch((err) => {
+              console.warn('notifyChatCompleted failed:', err);
+            });
+        } else {
+          apiClient
+            .notifyChatCompleted(chatId, { model: selectedModel })
+            .catch((err) => {
+              console.warn('notifyChatCompleted failed:', err);
+            });
         }
       } catch (error) {
         console.error('Failed to reload chat after streaming:', error);
+        apiClient
+          .notifyChatCompleted(chatId, { model: selectedModel })
+          .catch((err) => {
+            console.warn('notifyChatCompleted failed:', err);
+          });
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -928,7 +1046,7 @@ export function ChatScreen() {
         {imageUrls.length > 0 && (
           <View style={styles.messageImageContainer}>
             {imageUrls.map((url, index) => (
-              <View key={index} style={{ position: 'relative' }}>
+              <View key={index} style={styles.messageImageWrapper}>
                 <AuthenticatedImage
                   url={url}
                   style={styles.messageImage}
@@ -950,6 +1068,32 @@ export function ChatScreen() {
             ))}
           </View>
         )}
+        {!isUser && (() => {
+          const msgSources = (item as Message).sources;
+          if (!msgSources?.length) return null;
+          const toolSources = msgSources.filter(
+            (s) => s.tool_result && (s.source?.name ?? s.metadata?.[0]?.source)
+          );
+          if (toolSources.length === 0) return null;
+          return (
+            <View style={[styles.toolUsageContainer, { borderTopColor: colors.border + '80' }]}>
+              <Text style={[styles.toolUsageLabel, { color: colors.textSecondary }]}>
+                Tools used
+              </Text>
+              {toolSources.map((s, idx) => {
+                const name = s.source?.name ?? s.metadata?.[0]?.source ?? 'Tool';
+                return (
+                  <View key={idx} style={[styles.toolUsageChip, { backgroundColor: colors.background }]}>
+                    <Icon name="tool" size={12} color={colors.textSecondary} />
+                    <Text style={[styles.toolUsageChipText, { color: colors.text }]} numberOfLines={1}>
+                      {name}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          );
+        })()}
       </View>
     );
   };
@@ -1035,6 +1179,25 @@ export function ChatScreen() {
         }}
       />
 
+      <ListPicker
+        visible={showToolsModal}
+        title="Tools"
+        multiSelect
+        items={toolsList ? toolsList.map((t) => ({ id: t.id, label: t.name })) : []}
+        selectedIds={selectedToolIds}
+        onSelect={(ids) => setSelectedToolIds(ids)}
+        onClose={() => {
+          setShowToolsModal(false);
+          setToolsList(null);
+        }}
+        searchPlaceholder="Search tools..."
+        emptyMessage="No tools available"
+        loading={toolsLoading}
+        loadingMessage="Loading tools..."
+        allowClear
+        clearLabel="Clear selection"
+      />
+
       <FlatList
         ref={messagesListRef}
         data={displayMessages}
@@ -1053,7 +1216,6 @@ export function ChatScreen() {
           if (!scrollToEndOnLayoutRef.current) return;
           scrollFollowUpTimeoutsRef.current.forEach(clearTimeout);
           scrollFollowUpTimeoutsRef.current = [];
-          const listHeight = listHeightRef.current;
           const doScrollToBottom = () => {
             const ch = contentHeightRef.current;
             const lh = listHeightRef.current;
@@ -1079,11 +1241,7 @@ export function ChatScreen() {
 
       {attachedFiles.length > 0 && (
         <View
-          style={[
-            styles.attachments,
-            styles.attachmentsPositioned,
-            { bottom: (keyboardHeight > 0 ? keyboardHeight : 0) + inputRowHeight },
-          ]}
+          style={[styles.attachments, styles.attachmentsPositioned, attachmentsPositionStyle]}
         >
           {attachedFiles.map((f, i) => (
             <View key={i} style={styles.attachmentChip}>
@@ -1099,14 +1257,7 @@ export function ChatScreen() {
       )}
 
       <View
-        style={[
-          styles.inputRow,
-          styles.inputRowPositioned,
-          {
-            paddingBottom: 8 + (keyboardHeight > 0 ? 0 : insets.bottom),
-            bottom: keyboardHeight > 0 ? keyboardHeight : 0,
-          },
-        ]}
+        style={[styles.inputRow, styles.inputRowPositioned, inputRowPositionStyle]}
         onLayout={(e) => {
           const height = e.nativeEvent.layout.height;
           if (height > 0) {
@@ -1165,6 +1316,7 @@ export function ChatScreen() {
           )}
         </View>
       </Modal>
+
     </View>
   );
 }

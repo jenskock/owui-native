@@ -16,5 +16,7 @@ export const API_ENDPOINTS = {
   CHATS: '/api/v1/chats',
   /** Send/stream messages */
   CHAT_COMPLETIONS: '/api/chat/completions',
+  /** Notify backend that a chat completion finished (triggers title generation, etc.) */
+  CHAT_COMPLETED: '/api/chat/completed',
   MODELS: '/api/models',
 } as const;

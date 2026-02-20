@@ -107,3 +107,6 @@ lerna-debug.log*
 *.cert
 
 *.har
+
+# Open WebUI submodule (reference only; do not process)
+/open-webui/
