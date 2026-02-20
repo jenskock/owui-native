@@ -281,6 +281,11 @@ export function ChatsScreen() {
     fetchChats();
   }, [fetchChats]);
 
+  // Preload models list so opening Chat or Settings is instant (uses API client cache)
+  React.useEffect(() => {
+    apiClient.getModels().catch(() => {});
+  }, []);
+
   // Refresh when screen comes into focus
   useFocusEffect(
     useCallback(() => {

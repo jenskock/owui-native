@@ -1,9 +1,18 @@
 /**
  * OWUI Native API Client
- * Handles all API communication with OWUI Native instance
+ * Handles all API communication with Open WebUI
  */
 
 import { STORAGE_KEYS, API_ENDPOINTS } from '../constants/config';
+
+/** UUID v4 using Math.random() — works in RN without crypto polyfill. */
+function uuidv4(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type {
   LoginRequest,
@@ -29,10 +38,50 @@ export class ApiError extends Error {
   }
 }
 
+/** Strip client-only fields (e.g. _fileName) from content so the server/web UI don't see them. */
+function contentForApi(content: Message['content']): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return JSON.stringify(content);
+  const sanitized = content.map((part) => {
+    if (part == null || typeof part !== 'object') return part;
+    const obj = part as unknown as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(obj)) {
+      if (!key.startsWith('_')) out[key] = obj[key];
+    }
+    return out;
+  });
+  return JSON.stringify(sanitized);
+}
+
+/** Cache TTL for models list (2 min). Reduces 1–2s delay when opening chat/settings. */
+const MODELS_CACHE_TTL_MS = 2 * 60 * 1000;
+
+/** Server message shape for POST chat (history.messages entry). */
+type ServerHistoryMessage = {
+  id: string;
+  parentId: string | null;
+  childrenIds: string[];
+  role: string;
+  content: string;
+  timestamp: number;
+  models?: string[];
+  model?: string;
+  modelName?: string;
+  modelIdx?: number;
+  files?: unknown[];
+  [key: string]: unknown;
+};
+
 class ApiClient {
   private baseUrl: string = '';
   private token: string | null = null;
   private initialized: boolean = false;
+  private modelsCache: {
+    baseUrl: string;
+    data: ModelInfo[];
+    ts: number;
+  } | null = null;
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
@@ -47,10 +96,12 @@ class ApiClient {
 
   setBaseUrl(url: string): void {
     this.baseUrl = url.replace(/\/$/, '');
+    this.modelsCache = null;
   }
 
   setToken(token: string | null): void {
     this.token = token;
+    this.modelsCache = null;
   }
 
   /**
@@ -204,7 +255,12 @@ class ApiClient {
       `${API_ENDPOINTS.CHATS}/${chatId}`
     );
     const messages: Message[] = [];
-    const ms = raw.chat?.messages;
+    type ChatMessageLike = { id?: string; role?: string; content?: unknown; files?: unknown[]; timestamp?: number; [key: string]: unknown };
+    let ms: ChatMessageLike[] | undefined = Array.isArray(raw.chat?.messages) ? (raw.chat.messages as ChatMessageLike[]) : undefined;
+    if (!ms && raw.chat?.history?.messages && typeof raw.chat.history.messages === 'object') {
+      const historyMessages = raw.chat.history.messages as Record<string, ChatMessageLike>;
+      ms = Object.values(historyMessages).sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+    }
     if (Array.isArray(ms)) {
       for (const m of ms) {
         const files: MessageFile[] = [];
@@ -213,74 +269,58 @@ class ApiClient {
         console.log('Processing message:', m.role, 'Content type:', typeof m.content, 'Has files property:', 'files' in m);
         console.log('Raw message:', JSON.stringify(m, null, 2));
         
-        // Extract files from the message if they exist
-        // Files can be in format: {type: "image", url: "/api/v1/files/{id}/content"}
-        const messageWithFiles = m as { 
-          files?: Array<{ 
-            type?: string;
-            id?: string; 
-            url?: string; 
-            name?: string; 
-            content_type?: string;
-          }>;
+        // Extract files from the message (user attachments and assistant sources)
+        type FileEntry = {
+          id?: string;
+          url?: string;
+          name?: string;
+          content_type?: string;
+          type?: string;
+          file?: { id?: string; meta?: { content_type?: string; name?: string } };
         };
-        
-        // Check files array
+        const messageWithFiles = m as { files?: FileEntry[] };
+
+        const pushFile = (entry: FileEntry) => {
+          const fileId =
+            entry.id ??
+            (entry.url && !entry.url.startsWith('http') && !entry.url.startsWith('/') ? entry.url : undefined) ??
+            entry.file?.id;
+          let fileUrl: string;
+          if (entry.url?.startsWith('http')) {
+            fileUrl = entry.url;
+          } else if (entry.url?.startsWith('/')) {
+            fileUrl = `${this.baseUrl}${entry.url}`;
+          } else if (fileId) {
+            fileUrl = `${this.baseUrl}/api/v1/files/${fileId}/content`;
+          } else {
+            return;
+          }
+          const id = fileId ?? fileUrl.match(/\/files\/([^/]+)\//)?.[1] ?? '';
+          if (files.some((f) => f.id === id)) return;
+          const contentType =
+            entry.content_type ??
+            entry.file?.meta?.content_type ??
+            (entry.type === 'image' ? 'image/png' : 'application/octet-stream');
+          const name = entry.name ?? entry.file?.meta?.name ?? `file-${id || 'unknown'}`;
+          console.log('Adding file:', id, fileUrl, contentType);
+          files.push({
+            type: 'file',
+            id,
+            url: fileUrl,
+            name,
+            content_type: contentType,
+          });
+        };
+
         if (Array.isArray(messageWithFiles.files)) {
           console.log('Found files array with', messageWithFiles.files.length, 'files');
           for (const file of messageWithFiles.files) {
-            // Process file if it has a url (can be relative or absolute)
-            if (file.url) {
-              // Construct full file URL
-              let fileUrl: string;
-              if (file.url.startsWith('http')) {
-                // Already absolute URL
-                fileUrl = file.url;
-              } else if (file.url.startsWith('/')) {
-                // Relative URL - prepend base URL
-                fileUrl = `${this.baseUrl}${file.url}`;
-              } else if (file.id) {
-                // Construct from file ID
-                fileUrl = `${this.baseUrl}/api/v1/files/${file.id}/content`;
-              } else {
-                // Try to extract ID from URL pattern /api/v1/files/{id}/content
-                const match = file.url.match(/\/api\/v1\/files\/([^/]+)\/content/);
-                if (match && match[1]) {
-                  fileUrl = `${this.baseUrl}/api/v1/files/${match[1]}/content`;
-                } else {
-                  continue; // Skip if we can't construct a valid URL
-                }
-              }
-              
-              // Extract file ID from URL if not provided
-              const fileId = file.id || fileUrl.match(/\/files\/([^/]+)\//)?.[1] || '';
-              
-              // Determine content type from file type or use default
-              const contentType = file.content_type || 
-                (file.type === 'image' ? 'image/png' : undefined);
-              
-              console.log('Adding file:', fileId, fileUrl, contentType);
-              files.push({
-                type: 'file',
-                id: fileId,
-                url: fileUrl,
-                name: file.name || `file-${fileId || 'unknown'}`,
-                content_type: contentType,
-              });
-            } else if (file.id) {
-              // File has ID but no URL - construct URL
-              const fileUrl = `${this.baseUrl}/api/v1/files/${file.id}/content`;
-              console.log('Adding file from ID:', file.id, fileUrl);
-              files.push({
-                type: 'file',
-                id: file.id,
-                url: fileUrl,
-                name: file.name || `file-${file.id}`,
-                content_type: file.content_type,
-              });
-            }
+            if (file.url) pushFile(file);
+            else if (file.id) pushFile({ ...file, id: file.id, name: file.name ?? file.file?.meta?.name, content_type: file.content_type ?? file.file?.meta?.content_type });
+            else if (file.file?.id) pushFile({ id: file.file.id, name: file.file.meta?.name, content_type: file.content_type ?? file.file.meta?.content_type });
           }
         }
+        // Intentionally skip sources: they reference the same files the user already attached; no need to show them again on the assistant message.
         // Preserve content structure - could be string or array
         // If content is a JSON string, try to parse it
         let messageContent: Message['content'];
@@ -302,7 +342,20 @@ class ApiClient {
         } else {
           messageContent = '';
         }
-        
+
+        // When server omits files array, derive file refs from content so image previews still work
+        if (files.length === 0 && Array.isArray(messageContent)) {
+          for (const part of messageContent) {
+            if (part && typeof part === 'object' && (part as { type?: string }).type === 'image_url') {
+              const imageUrl = (part as { image_url?: { url?: string } }).image_url?.url;
+              if (imageUrl && !imageUrl.startsWith('data:')) {
+                const fileId = imageUrl.startsWith('http') ? undefined : imageUrl;
+                if (fileId) pushFile({ id: fileId, url: imageUrl, content_type: 'image/png' });
+              }
+            }
+          }
+        }
+
         messages.push({
           id: m.id,
           role: (m.role as 'user' | 'assistant' | 'system') ?? 'user',
@@ -368,10 +421,125 @@ class ApiClient {
     });
   }
 
+  /**
+   * POST /api/v1/chats/:id — update chat state with a new user message (and empty assistant placeholder).
+   * Matches the web UI flow so the server has the message before we call completions.
+   */
+  async updateChatWithNewMessage(
+    chatId: string,
+    existingMessages: Message[],
+    newUserContent: Message['content'],
+    modelId: string
+  ): Promise<void> {
+    await this.initialize();
+    const now = Math.floor(Date.now() / 1000);
+    const newUserMsgId = uuidv4();
+    const newAssistantMsgId = uuidv4();
+
+    const contentStr =
+      typeof newUserContent === 'string'
+        ? newUserContent
+        : Array.isArray(newUserContent)
+          ? JSON.stringify(newUserContent)
+          : '';
+
+    const orderedIds: string[] = existingMessages.map((m) => (m.id as string) ?? uuidv4());
+    const historyMessages: Record<string, ServerHistoryMessage> = {};
+    let prevId: string | null = null;
+
+    for (let i = 0; i < existingMessages.length; i++) {
+      const m = existingMessages[i];
+      const id = orderedIds[i];
+      const nextId = i + 1 < existingMessages.length ? orderedIds[i + 1] : newUserMsgId;
+      const content =
+        typeof m.content === 'string'
+          ? m.content
+          : Array.isArray(m.content)
+            ? JSON.stringify(m.content)
+            : '';
+      const entry: ServerHistoryMessage = {
+        id,
+        parentId: prevId,
+        childrenIds: [nextId],
+        role: m.role,
+        content,
+        timestamp: (m.timestamp as number) ?? now,
+      };
+      if (m.role === 'user') {
+        entry.models = [modelId];
+        if (m.files?.length) entry.files = m.files;
+      } else if (m.role === 'assistant') {
+        entry.model = modelId;
+        entry.modelName = '';
+        entry.modelIdx = 0;
+      }
+      historyMessages[id] = entry;
+      prevId = id;
+    }
+
+    historyMessages[newUserMsgId] = {
+      id: newUserMsgId,
+      parentId: prevId,
+      childrenIds: [newAssistantMsgId],
+      role: 'user',
+      content: contentStr,
+      timestamp: now,
+      models: [modelId],
+    };
+    historyMessages[newAssistantMsgId] = {
+      id: newAssistantMsgId,
+      parentId: newUserMsgId,
+      childrenIds: [],
+      role: 'assistant',
+      content: '',
+      timestamp: now,
+      model: modelId,
+      modelName: '',
+      modelIdx: 0,
+    };
+
+    const messagesArray: ServerHistoryMessage[] = [
+      ...orderedIds.map((id) => historyMessages[id]),
+      historyMessages[newUserMsgId],
+      historyMessages[newAssistantMsgId],
+    ];
+
+    const body = {
+      chat: {
+        models: [modelId],
+        history: { messages: historyMessages, currentId: newAssistantMsgId },
+        messages: messagesArray,
+        params: {},
+      },
+    };
+
+    await this.request<unknown>(`${API_ENDPOINTS.CHATS}/${chatId}`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
   async getModels(): Promise<ModelInfo[]> {
+    await this.initialize();
+    const now = Date.now();
+    const cached =
+      this.modelsCache &&
+      this.modelsCache.baseUrl === this.baseUrl &&
+      now - this.modelsCache.ts < MODELS_CACHE_TTL_MS;
+    if (cached && this.modelsCache) {
+      const data = this.modelsCache.data;
+      // Refresh in background so next time is still fresh
+      this.fetchAndCacheModels().catch(() => {});
+      return data;
+    }
+    return this.fetchAndCacheModels();
+  }
+
+  private async fetchAndCacheModels(): Promise<ModelInfo[]> {
     try {
       const response = await this.request<unknown>(API_ENDPOINTS.MODELS);
       if (response == null || typeof response !== 'object') {
+        this.modelsCache = { baseUrl: this.baseUrl, data: [], ts: Date.now() };
         return [];
       }
       let rawList: unknown[] = [];
@@ -389,6 +557,7 @@ class ApiClient {
           name: typeof m.name === 'string' ? m.name : String(m.name ?? m.id ?? ''),
           ...m,
         }));
+      this.modelsCache = { baseUrl: this.baseUrl, data: result, ts: Date.now() };
       return result;
     } catch (error) {
       console.error('getModels error:', error);
@@ -408,7 +577,7 @@ class ApiClient {
     };
     const messages = request.messages.map((m) => ({
       role: m.role,
-      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      content: contentForApi(m.content),
     }));
     const requestBody = JSON.stringify({
       stream: true,
@@ -444,10 +613,9 @@ class ApiClient {
             ...request,
             stream: false,
           });
-          const assistantContent = 
-            typeof nonStreamResponse.message?.content === 'string'
-              ? nonStreamResponse.message.content
-              : '';
+          const r = nonStreamResponse as { message?: { content?: unknown }; choices?: Array<{ message?: { content?: unknown } }> };
+          const raw = r.message?.content ?? r.choices?.[0]?.message?.content;
+          const assistantContent = typeof raw === 'string' ? raw : Array.isArray(raw) ? '' : String(raw ?? '');
           if (assistantContent) {
             yield assistantContent;
           }
@@ -536,7 +704,7 @@ class ApiClient {
   ): Promise<{ message: Message }> {
     const messages = request.messages.map((m) => ({
       role: m.role,
-      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      content: contentForApi(m.content),
     }));
     return this.request(`${API_ENDPOINTS.CHAT_COMPLETIONS}`, {
       method: 'POST',
